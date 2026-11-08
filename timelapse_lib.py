@@ -46,10 +46,11 @@ except Exception:  # pragma: no cover - headless
     FreeCADGui = None
     GUI = False
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 LIB_NAME = "Timelapse_Features"
 DOCK_NAME = "Timelapse_Features_Dock"
 PANEL_NAME = "Timelapse_Features_Panel"
+GIF_PREVIEW_NAME = "Timelapse_GifPreview"
 
 # object types that are never a "building step" of the shape
 SKIP_TYPES = {
@@ -657,8 +658,69 @@ def downloads_dir():
     return guess if os.path.isdir(guess) else os.path.expanduser("~")
 
 
+def timelapse_root():
+    """Folder that holds every run folder."""
+    return os.path.join(downloads_dir(), "FreeCAD_timelapse")
+
+
+def latest_gif(doc=None):
+    """Newest GIF under the output root, preferring one made from *doc*."""
+    root = timelapse_root()
+    if not os.path.isdir(root):
+        return None
+    wanted = ""
+    if doc is not None:
+        wanted = _file_safe(doc.Label or doc.Name).lower()
+    best = None
+    for folder in sorted(os.listdir(root)):
+        sub = os.path.join(root, folder)
+        if not os.path.isdir(sub):
+            continue
+        for name in sorted(os.listdir(sub)):
+            if not name.lower().endswith(".gif"):
+                continue
+            path = os.path.join(sub, name)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            same_doc = 1 if (wanted and folder.lower().startswith(wanted)) else 0
+            key = (same_doc, mtime)
+            if best is None or key > best[0]:
+                best = (key, path)
+    return best[1] if best else None
+
+
+def reveal_in_explorer(path):
+    """Open the folder that holds *path*, with the file selected."""
+    path = os.path.normpath(path)
+    folder = os.path.dirname(path)
+    try:
+        import subprocess
+        subprocess.Popen(["explorer", "/select," + path])
+        return True
+    except Exception as exc:
+        warn("explorer /select failed (%s), opening the folder instead" % exc)
+    try:
+        os.startfile(folder)
+        return True
+    except Exception as exc:
+        warn("cannot open %s: %s" % (folder, exc))
+        return False
+
+
+def open_with_system(path):
+    """Hand the file to its default Windows application (photo/GIF viewer)."""
+    try:
+        os.startfile(os.path.normpath(path))
+        return True
+    except Exception as exc:
+        warn("cannot open %s: %s" % (path, exc))
+        return False
+
+
 def make_output_dir(doc, root=None):
-    root = root or os.path.join(downloads_dir(), "FreeCAD_timelapse")
+    root = root or timelapse_root()
     stamp = time.strftime("%Y%m%d-%H%M%S")
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in
                    (doc.Label or doc.Name))
@@ -842,6 +904,87 @@ def _write_manifest(result, tl):
 # --------------------------------------------------------------------------
 if GUI:
 
+    class GifPreview(QtWidgets.QDialog):
+        """Non-modal window that plays the generated GIF inside FreeCAD."""
+
+        def __init__(self, gif_path, parent=None):
+            super(GifPreview, self).__init__(parent)
+            self.setObjectName(GIF_PREVIEW_NAME)
+            self.setWindowFlags(self.windowFlags() | QtCore.Qt.Window)
+            self.resize(760, 620)
+            self.path = None
+            self.movie = None
+            lay = QtWidgets.QVBoxLayout(self)
+            lay.setContentsMargins(6, 6, 6, 6)
+            self.label = QtWidgets.QLabel("")
+            self.label.setAlignment(QtCore.Qt.AlignCenter)
+            self.label.setMinimumSize(320, 240)
+            self.label.setStyleSheet("background:#1e1e1e;color:#dddddd;")
+            lay.addWidget(self.label, 1)
+            self.info = QtWidgets.QLabel("")
+            self.info.setWordWrap(True)
+            self.info.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            lay.addWidget(self.info)
+            row = QtWidgets.QHBoxLayout()
+            self.folder_btn = QtWidgets.QPushButton("open folder")
+            self.sys_btn = QtWidgets.QPushButton("open with Windows viewer")
+            self.close_btn = QtWidgets.QPushButton("close")
+            row.addWidget(self.folder_btn)
+            row.addWidget(self.sys_btn)
+            row.addStretch(1)
+            row.addWidget(self.close_btn)
+            lay.addLayout(row)
+            self.folder_btn.clicked.connect(lambda: reveal_in_explorer(self.path))
+            self.sys_btn.clicked.connect(lambda: open_with_system(self.path))
+            self.close_btn.clicked.connect(self.close)
+            self.open_path(gif_path)
+
+        def open_path(self, gif_path):
+            self.path = gif_path
+            self.setWindowTitle("timelapse preview - %s" % os.path.basename(gif_path))
+            if self.movie is not None:
+                self.movie.stop()
+                self.movie = None
+            movie = QtGui.QMovie(gif_path)
+            if not movie.isValid():
+                self.label.setText("this GIF cannot be played here\n%s\n\n"
+                                   "use 'open with Windows viewer'"
+                                   % os.path.basename(gif_path))
+                self.info.setText(gif_path)
+                return
+            movie.jumpToFrame(0)
+            size = movie.currentPixmap().size()
+            scale = min(1.0, 700.0 / max(size.width(), 1),
+                        480.0 / max(size.height(), 1))
+            if scale < 1.0:
+                movie.setScaledSize(QtCore.QSize(max(int(size.width() * scale), 1),
+                                                 max(int(size.height() * scale), 1)))
+            movie.setCacheMode(QtGui.QMovie.CacheAll)
+            self.movie = movie
+            self.label.setMovie(movie)
+            movie.start()
+            try:
+                kb = os.path.getsize(gif_path) / 1024.0
+            except OSError:
+                kb = 0.0
+            self.info.setText("%d frames  |  %dx%d px  |  %.0f kB\n%s"
+                              % (movie.frameCount(), size.width(), size.height(),
+                                 kb, gif_path))
+
+    def show_gif_preview(gif_path):
+        """Open (or reuse) the in-FreeCAD GIF player."""
+        mw = FreeCADGui.getMainWindow()
+        dlg = mw.findChild(QtWidgets.QDialog, GIF_PREVIEW_NAME)
+        if dlg is None:
+            dlg = GifPreview(gif_path, mw)
+        else:
+            dlg.open_path(gif_path)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        pump(1)
+        return dlg
+
     class TimelapsePanel(QtWidgets.QWidget):
 
         def __init__(self, doc=None, parent=None):
@@ -902,9 +1045,16 @@ if GUI:
             row2.addWidget(self.restore_btn)
             outer.addLayout(row2)
 
+            row3 = QtWidgets.QHBoxLayout()
             self.gif_btn = QtWidgets.QPushButton("create GIF (all steps)")
             self.gif_btn.setMinimumHeight(30)
-            outer.addWidget(self.gif_btn)
+            self.open_btn = QtWidgets.QPushButton("open GIF")
+            self.open_btn.setMinimumHeight(30)
+            self.open_btn.setToolTip("Open the output folder and play the GIF that was "
+                                     "produced last (for this document if there is one)")
+            row3.addWidget(self.gif_btn, 3)
+            row3.addWidget(self.open_btn, 2)
+            outer.addLayout(row3)
 
             self.status = QtWidgets.QLabel("")
             self.status.setWordWrap(True)
@@ -918,6 +1068,7 @@ if GUI:
             self.refresh_btn.clicked.connect(lambda: self.refresh())
             self.restore_btn.clicked.connect(self.restore_original)
             self.gif_btn.clicked.connect(self.create_gif)
+            self.open_btn.clicked.connect(self.open_gif)
             self.list.currentItemChanged.connect(self._on_item)
 
         # -- model state ----------------------------------------------
@@ -1035,6 +1186,27 @@ if GUI:
             finally:
                 self.busy = False
                 self.gif_btn.setEnabled(True)
+
+        def open_gif(self):
+            """Show the folder that holds the GIF and play the GIF itself."""
+            gif = None
+            if self.last_result and self.last_result.get("gif"):
+                if os.path.isfile(self.last_result["gif"]):
+                    gif = self.last_result["gif"]
+            if gif is None:
+                gif = latest_gif(self.doc)
+            if gif is None:
+                self.status.setText("no GIF yet - click 'create GIF (all steps)' first\n"
+                                    "(output folder: %s)" % timelapse_root())
+                return
+            try:
+                show_gif_preview(gif)
+            except Exception as exc:
+                warn("in-FreeCAD preview failed (%s), using the Windows viewer" % exc)
+                open_with_system(gif)
+            reveal_in_explorer(gif)
+            self.status.setText("GIF: %s" % gif)
+            log("open GIF: " + gif)
 
         def set_capture_mode(self, on):
             """Give the 3D view the whole window while frames are captured."""

@@ -26,7 +26,13 @@ export that walk as a GIF.
    angle, sweeps every step, writes
    `Downloads\FreeCAD_timelapse\<document>_<stamp>\` with
    `frames\NNN_<label>.png`, `timelapse_<doc>.gif`, `manifest.json`, `steps.txt`.
-5. `restore original` (or closing the panel) puts back the tips and visibility the
+5. **open GIF** opens the run folder that holds it (file selected in Explorer)
+   and plays the GIF right away in a small window inside FreeCAD
+   (`7 frames | 1000x1006 px | 106 kB` + the full path), with `open folder` and
+   `open with Windows viewer` buttons there as well. With no run in this session
+   it picks the newest GIF under `Downloads\FreeCAD_timelapse\`, preferring one
+   made from the active document.
+6. `restore original` (or closing the panel) puts back the tips and visibility the
    document had before the macro touched it. The document is **never saved**.
 
 ## How the order is recovered

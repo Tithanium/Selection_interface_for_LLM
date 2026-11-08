@@ -24,6 +24,7 @@ tree step, and the frames themselves show the part growing.
 | 2 | step display (`apply_level`) | setting level k sets `Body.Tip` to the k-th step and the shown shape volume matches that feature's own `Shape.Volume` |
 | 3 | panel (`open_panel`) | dock titled "Timelapse - building steps" appears, lists N rows, `< step` / `step >` / list click / reset / final all move the level; closing restores the original tips |
 | 4 | GIF (`build_timelapse`) | `check_timelapse.py <outdir>` → `RESULT: PASS`, N frames, N = number of tree steps |
+| 4b | `open GIF` button | one click shows the GIF playing in a FreeCAD window (`QMovie` frame count = N) and opens the run folder in Explorer with the file selected |
 | 5 | accessibility | `Macro > Macros...` lists `Timelapse_Features.FCMacro` and it runs from there |
 | 6 | evidence | every frame that goes into the GIF is inspected as an image; the GIF itself is never used as evidence, only its frame count is machine-checked |
 
