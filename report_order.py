@@ -18,7 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-import timelapse_lib as tl  # noqa: E402
+import selection_interface_for_llm_lib as tl  # noqa: E402
 
 
 def main():

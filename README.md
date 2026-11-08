@@ -1,13 +1,13 @@
-# Timelapse_Features — progressive-build timelapse for FreeCAD 1.1
+# Selection_interface_for_LLM — progressive-build timelapse for FreeCAD 1.1
 
 Watch a finished PartDesign part being built again, one feature at a time, and
 export that walk as a GIF.
 
 ```
 %APPDATA%\FreeCAD\v1-1\Macro\            ( = FreeCAD.getUserMacroDir(True) )
-├── Timelapse_Features.FCMacro           <- the file Macro > Macros... runs
-└── Timelapse_Features\                  <- this folder (library, not listed as a macro)
-    ├── timelapse_lib.py                 logic + panel
+├── Selection_interface_for_LLM.FCMacro           <- the file Macro > Macros... runs
+└── Selection_interface_for_LLM\                  <- this folder (library, not listed as a macro)
+    ├── selection_interface_for_llm_lib.py                 logic + panel
     ├── report_order.py                  headless order check  (freecadcmd)
     ├── check_timelapse.py               output-folder verifier (plain python)
     ├── task.md                          what the tool must do, and how it is checked
@@ -16,8 +16,8 @@ export that walk as a GIF.
 
 ## Use
 
-1. Open the part, `Macro > Macros... > Timelapse_Features.FCMacro > Execute`.
-2. A dock named **Timelapse - building steps** appears on the right. At the top, the
+1. Open the part, `Macro > Macros... > Selection_interface_for_LLM.FCMacro > Execute`.
+2. A dock named **Selection interface for LLM - building steps** appears on the right. At the top, the
    **display** list chooses how everything is drawn: `solid + edges`, `solid`,
    `edges only`, `transparent`, `points`. Just below, the **show also** boxes choose
    *what* is drawn (all ticked by default):

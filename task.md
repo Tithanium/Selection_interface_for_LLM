@@ -1,6 +1,6 @@
 # Task — progressive-build timelapse macro for FreeCAD
 
-**Deliverable:** a FreeCAD macro (`Timelapse_Features`) installed in the user macro
+**Deliverable:** a FreeCAD macro (`Selection_interface_for_LLM`) installed in the user macro
 folder that (a) recovers the exact computation order of a PartDesign document,
 (b) lets the user walk that order step by step with `set_tip` + visibility so the
 part is rebuilt progressively on screen, and (c) writes a GIF of that walk
@@ -20,9 +20,9 @@ tree step, and the frames themselves show the part growing.
 
 | # | piece | check |
 |---|-------|-------|
-| 1 | computation order (`timelapse_lib.timeline`) | `freecadcmd report_order.py <file>` prints `RESULT: PASS`; order equals the `Tip -> BaseFeature` chain of each body |
+| 1 | computation order (`selection_interface_for_llm_lib.timeline`) | `freecadcmd report_order.py <file>` prints `RESULT: PASS`; order equals the `Tip -> BaseFeature` chain of each body |
 | 2 | step display (`apply_level`) | setting level k sets `Body.Tip` to the k-th step and the shown shape volume matches that feature's own `Shape.Volume` |
-| 3 | panel (`open_panel`) | dock titled "Timelapse - building steps" appears, lists N rows, `< step` / `step >` / list click / reset / final all move the level; closing restores the original tips |
+| 3 | panel (`open_panel`) | dock titled "Selection interface for LLM - building steps" appears, lists N rows, `< step` / `step >` / list click / reset / final all move the level; closing restores the original tips |
 | 4 | GIF (`build_timelapse`) | `check_timelapse.py <outdir>` → `RESULT: PASS`, N frames, N = number of tree steps |
 | 4b | `open GIF` button | one click shows the GIF playing in a FreeCAD window (`QMovie` frame count = N) and opens the run folder in Explorer with the file selected |
 | 4c | LLM bridge (note box + `copy to clipboard description for LLM`) | copy the request for step 3 with `set holes diameter to 5mm`, paste it into a fresh `pi` session: the prompt names the folder, the file, the ban on modifying it and the new file name, the feature type and its sketch; the session delivers `<stem>_modified.FCStd` with the right dimension changed while the source SHA256 is unchanged |
@@ -30,7 +30,7 @@ tree step, and the frames themselves show the part growing.
 | 4e | computation order of a piece made by several features | no step may consume a body that is still being built: on `02_seringue_cardanV3` the 4 mirrors/fusions land at steps 37/57/58/59 instead of 4/10/19/28, step count unchanged (68 and 66), 0 ordering warnings, GIF of both files re-made and `check_timelapse.py` PASS |
 | 4f | a base feature / fusion does not draw a duplicated surface | step 60 of `02_seringue_cardanV3` (`BaseFeature`) must not leave the same surface painted twice: with `base / fused results` unticked, the visible objects at level 59/60/61 are the fusion only, the base feature only, then the body's own feature — no coincident copies (compare `60_dup_on` mean 201.06 / 161807 px vs `60_dup_off` 209.81), and the step is shown translucent (mean 209.81 → 213.91) |
 | 4g | the profile of the selected feature is a thick line | the orange profile must be drawn as a thick line even though the driver clamps `LineWidth` (measured 709/850/1017/1219 orange px for width 1/3/6/10, `PointSize` ignored): the overlay is a chain of Coin tubes in `SoAnnotation`, sized in pixels, absent from the document, cleared by `restore original` / dock close / document switch / `see_through=False`, so `_02_piston_cardanV3` step 11 measures 2566 → 10809 orange pixels and the line is 7 px wide instead of 4 (native 2377x1717) |
-| 5 | accessibility | `Macro > Macros...` lists `Timelapse_Features.FCMacro` and it runs from there |
+| 5 | accessibility | `Macro > Macros...` lists `Selection_interface_for_LLM.FCMacro` and it runs from there |
 | 6 | evidence | every frame that goes into the GIF is inspected as an image; the GIF itself is never used as evidence, only its frame count is machine-checked |
 
 ## Ground rules kept

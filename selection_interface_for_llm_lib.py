@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""timelapse_lib.py -- progressive-build timelapse for FreeCAD 1.1.x.
+"""selection_interface_for_llm_lib.py -- progressive-build timelapse for FreeCAD 1.1.x.
 
 Purpose
 -------
@@ -49,11 +49,11 @@ except Exception:  # pragma: no cover - headless
     FreeCADGui = None
     GUI = False
 
-VERSION = "1.7.0"
-LIB_NAME = "Timelapse_Features"
-DOCK_NAME = "Timelapse_Features_Dock"
-PANEL_NAME = "Timelapse_Features_Panel"
-GIF_PREVIEW_NAME = "Timelapse_GifPreview"
+VERSION = "2.0.0"
+LIB_NAME = "Selection_interface_for_LLM"
+DOCK_NAME = "Selection_interface_for_LLM_Dock"
+PANEL_NAME = "Selection_interface_for_LLM_Panel"
+GIF_PREVIEW_NAME = "Selection_GifPreview"
 
 # object types that are never a "building step" of the shape
 SKIP_TYPES = {
@@ -109,11 +109,11 @@ CONTAINER_TYPES = ("App::Part", "App::DocumentObjectGroup")
 # small helpers
 # --------------------------------------------------------------------------
 def log(msg):
-    FreeCAD.Console.PrintMessage("[timelapse] %s\n" % msg)
+    FreeCAD.Console.PrintMessage("[selection] %s\n" % msg)
 
 
 def warn(msg):
-    FreeCAD.Console.PrintWarning("[timelapse] %s\n" % msg)
+    FreeCAD.Console.PrintWarning("[selection] %s\n" % msg)
 
 
 def short_type(type_id):
@@ -1826,7 +1826,7 @@ if GUI:
 
         def open_path(self, gif_path):
             self.path = gif_path
-            self.setWindowTitle("timelapse preview - %s" % os.path.basename(gif_path))
+            self.setWindowTitle("GIF preview - %s" % os.path.basename(gif_path))
             if self.movie is not None:
                 self.movie.stop()
                 self.movie = None
@@ -1870,10 +1870,10 @@ if GUI:
         pump(1)
         return dlg
 
-    class TimelapsePanel(QtWidgets.QWidget):
+    class SelectionPanel(QtWidgets.QWidget):
 
         def __init__(self, doc=None, parent=None):
-            super(TimelapsePanel, self).__init__(parent)
+            super(SelectionPanel, self).__init__(parent)
             self.setObjectName(PANEL_NAME)
             self.doc = doc
             self.tl = None
@@ -1900,7 +1900,7 @@ if GUI:
             top = QtWidgets.QHBoxLayout()
             label = QtWidgets.QLabel("display:")
             self.mode_box = QtWidgets.QComboBox()
-            self.mode_box.setObjectName("Timelapse_DisplayMode")
+            self.mode_box.setObjectName("Selection_DisplayMode")
             self.mode_box.addItems([name for (name, _m, _t) in DISPLAY_MODES])
             self.mode_box.setToolTip("How the parts are rendered: solid, edges only, "
                                     "transparent ...")
@@ -1910,28 +1910,28 @@ if GUI:
 
             # what else is drawn, all ticked by default except the duplicates
             self.show_box = QtWidgets.QGroupBox("show also")
-            self.show_box.setObjectName("Timelapse_ShowBox")
+            self.show_box.setObjectName("Selection_ShowBox")
             show_grid = QtWidgets.QGridLayout(self.show_box)
             show_grid.setContentsMargins(6, 2, 6, 2)
             show_grid.setHorizontalSpacing(10)
             show_grid.setVerticalSpacing(1)
             self.cb_datum = QtWidgets.QCheckBox("datum objects")
-            self.cb_datum.setObjectName("Timelapse_ShowDatum")
+            self.cb_datum.setObjectName("Selection_ShowDatum")
             self.cb_datum.setToolTip(
                 "Keep the datum planes / lines / points of the steps already \n"
                 "built on screen. Unticked, only the datum of the level you are \n"
                 "looking at stays visible")
             self.cb_sketch = QtWidgets.QCheckBox("profile sketch")
-            self.cb_sketch.setObjectName("Timelapse_ShowSketch")
+            self.cb_sketch.setObjectName("Selection_ShowSketch")
             self.cb_sketch.setToolTip(
                 "Show the sketch the selected feature is built from, highlighted")
             self.cb_others = QtWidgets.QCheckBox("other bodies")
-            self.cb_others.setObjectName("Timelapse_ShowOthers")
+            self.cb_others.setObjectName("Selection_ShowOthers")
             self.cb_others.setToolTip(
                 "Show the parts built by the other bodies at this level. \n"
                 "Unticked, only the body of the selected step is drawn")
             self.cb_dup = QtWidgets.QCheckBox("base / fused results")
-            self.cb_dup.setObjectName("Timelapse_ShowDup")
+            self.cb_dup.setObjectName("Selection_ShowDup")
             self.cb_dup.setChecked(False)
             self.cb_dup.setToolTip(
                 "A base feature or a fusion (BaseFeature, MultiFuse) does not build\n"
@@ -1948,7 +1948,7 @@ if GUI:
             outer.addWidget(self.show_box)
 
             self.list = QtWidgets.QTreeWidget()
-            self.list.setObjectName("Timelapse_StepList")
+            self.list.setObjectName("Selection_StepList")
             self.list.setColumnCount(3)
             self.list.setHeaderLabels(["#", "feature", "type  /  made from"])
             self.list.setRootIsDecorated(False)
@@ -1998,7 +1998,7 @@ if GUI:
                 "modification to apply to the selected feature:")
             outer.addWidget(self.note_label)
             self.note = QtWidgets.QPlainTextEdit()
-            self.note.setObjectName("Timelapse_Note")
+            self.note.setObjectName("Selection_Note")
             self.note.setPlaceholderText("e.g. set holes diameter to 5mm")
             self.note.setFixedHeight(58)
             self.note.setTabChangesFocus(True)
@@ -2290,15 +2290,15 @@ if GUI:
                 if not on:
                     dock.setVisible(True)
 
-    class TimelapseDock(QtWidgets.QDockWidget):
+    class SelectionDock(QtWidgets.QDockWidget):
         def closeEvent(self, event):
             panel = self.widget()
-            if isinstance(panel, TimelapsePanel) and panel.snapshot is not None:
+            if isinstance(panel, SelectionPanel) and panel.snapshot is not None:
                 try:
                     restore_state(panel.doc, panel.snapshot)
                 except Exception as exc:
                     warn("restore on close failed: %s" % exc)
-            super(TimelapseDock, self).closeEvent(event)
+            super(SelectionDock, self).closeEvent(event)
 
 
 def open_panel():
@@ -2309,16 +2309,16 @@ def open_panel():
     main = FreeCADGui.getMainWindow()
     dock = main.findChild(QtWidgets.QDockWidget, DOCK_NAME)
     if dock is None:
-        dock = TimelapseDock("Timelapse - building steps", main)
+        dock = SelectionDock("Selection interface for LLM - building steps", main)
         dock.setObjectName(DOCK_NAME)
-        dock.setWidget(TimelapsePanel(doc))
+        dock.setWidget(SelectionPanel(doc))
         dock.setAllowedAreas(QtCore.Qt.LeftDockWidgetArea | QtCore.Qt.RightDockWidgetArea)
         main.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
     else:
         panel = dock.widget()
-        if not isinstance(panel, TimelapsePanel):
+        if not isinstance(panel, SelectionPanel):
             # the library was reloaded: the widget holds a stale class instance
-            dock.setWidget(TimelapsePanel(doc))
+            dock.setWidget(SelectionPanel(doc))
         else:
             panel.doc = doc
             panel.refresh()
@@ -2327,14 +2327,14 @@ def open_panel():
     dock.raise_()
     pump()
     panel = dock.widget()
-    if isinstance(panel, TimelapsePanel):
+    if isinstance(panel, SelectionPanel):
         panel.set_level(panel.count())
-    log("panel ready: %s, %d steps" % (doc.Name, panel.count() if isinstance(panel, TimelapsePanel) else -1))
+    log("panel ready: %s, %d steps" % (doc.Name, panel.count() if isinstance(panel, SelectionPanel) else -1))
     return dock
 
 
 # --------------------------------------------------------------------------
-# headless report (freecadcmd): python timelapse_lib.py <file.FCStd>
+# headless report (freecadcmd): python selection_interface_for_llm_lib.py <file.FCStd>
 # --------------------------------------------------------------------------
 def report(path):
     doc = FreeCAD.openDocument(path)
