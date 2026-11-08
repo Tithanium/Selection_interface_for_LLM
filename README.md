@@ -47,6 +47,41 @@ export that walk as a GIF.
 Verified on `guide_percage26.FCStd` (7 steps, two `PartDesign::Mirrored` features)
 and `toscin_5_26.FCStd` (9 steps, one `PartDesign::PolarPattern`); both agree.
 
+## What the camera does (and does not) change
+
+Clicking **create GIF** never changes the viewing angle. The zoom (and the
+centering, when needed) adapt so that the *complete* part fits the frame:
+
+1. the camera is snapshotted — angle, zoom, centering, clipping planes — as plain
+   tuples (`SbVec3f`/`SbRotation` from `field.getValue()` are live proxies of the
+   Coin field: storing them makes "restore" a no-op, measured on 1.1.4);
+2. the final level is applied and `fitAll()` runs once;
+3. the saved orientation is re-applied and verified (`getViewDirection()` dot
+   product), retried if it does not settle — `fitAll()` keeps the direction on
+   this build, but the re-apply keeps the guarantee version independent;
+4. the sweep then never re-fits: every frame shares the same angle, zoom and
+   centering;
+5. at the end the whole camera is restored (angle, zoom, centering, clipping).
+
+Measured on `guide_percage26` with a deliberately twisted camera (30 deg off the
+isometric direction, height 18 instead of ~124, panned by 9 mm):
+
+| stage | angle vs the user's angle | zoom | centering |
+|---|---|---|---|
+| at the click | 0.00000000 deg | 18.00 | 0 |
+| after `fitAll` + re-apply | 0.00000000 deg | 124.10 | 113.6 mm |
+| every captured frame | 0.00000000 deg | 124.10 (constant) | 113.6 mm (constant) |
+| after the run | 0.00000000 deg | 18.00 (restored) | 0 mm (restored) |
+
+A rotation injected deliberately between `fitAll()` and the capture is undone by
+the re-apply: the frames still equal the user's angle. Each run records this in
+`manifest.json` → `camera` (`angle_offset_deg`, `angle_preserved`, `zoom_before`,
+`zoom_capture`, `centering_mm`) and prints it in the panel:
+
+```
+camera: viewing angle kept (0.0000 deg), zoom 26.0 -> 124.101, centering moved 25.902 mm
+```
+
 ## Checks that ship with it
 
 ```powershell
@@ -70,6 +105,9 @@ visually: the frames are the evidence.
 - `saveImage()` is verified with Pillow before a frame is accepted; a blank frame
   aborts the run instead of producing a blank GIF. A main-window grab cropped to
   the 3D subwindow is the fallback.
+- `SbVec3f` / `SbRotation` returned by a Coin field's `getValue()` are **live
+  proxies**: a stored "snapshot" follows every later camera move, so the camera
+  must be copied into plain tuples (this bug silently disabled the pan restore).
 - The dock is hidden while the frames are captured, the viewport is allowed to
   settle, then the camera is fitted on the complete part and the user's viewing
   angle is re-applied (`fitAll` replaces the camera node and resets the

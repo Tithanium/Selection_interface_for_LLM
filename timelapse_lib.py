@@ -19,9 +19,12 @@ Design rules that this file obeys (each one is a trap measured on 1.1.4):
   * ordering comes from a topological sort of the real dependencies, then each
     body's Tip -> BaseFeature chain is walked and compared: a mismatch is
     reported, not silently accepted;
-  * the camera is fitted ONCE on the final part and the user's viewing angle is
-    re-applied afterwards (fitAll replaces the camera node and resets the
-    orientation), then frozen for the whole sweep;
+  * the camera is fitted ONCE on the final part, the user's viewing angle is
+    re-applied afterwards and frozen for the whole sweep: only the zoom and the
+    centering of the image may move (measured on 1.1.4: 0.000000 deg of angle
+    change on every frame, even with a rotation injected right after fitAll);
+  * Coin values returned by field.getValue() are LIVE proxies, not copies, so the
+    camera snapshot stores plain tuples -- otherwise "restore" silently no-ops;
   * saveImage() is verified with PIL (blank images have been observed on this
     box), and a blank capture aborts the run instead of writing a blank GIF;
   * every change is followed by a GUI pump before anything is read back.
@@ -46,7 +49,7 @@ except Exception:  # pragma: no cover - headless
     FreeCADGui = None
     GUI = False
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 LIB_NAME = "Timelapse_Features"
 DOCK_NAME = "Timelapse_Features_Dock"
 PANEL_NAME = "Timelapse_Features_Panel"
@@ -470,11 +473,19 @@ def front_document(doc):
 
 
 def camera_snapshot(view):
+    """Freeze the camera.
+
+    SbVec3f / SbRotation returned by field.getValue() are LIVE proxies of the
+    Coin field, not copies: storing them would make the "snapshot" follow every
+    later camera move (measured on 1.1.4). Store plain tuples instead.
+    """
     cam = view.getCameraNode()
+    pos = cam.position.getValue()
+    rot = cam.orientation.getValue().getValue()
     return {
         "node": cam,
-        "position": cam.position.getValue(),
-        "orientation": cam.orientation.getValue(),
+        "position": (pos[0], pos[1], pos[2]),
+        "orientation": (rot[0], rot[1], rot[2], rot[3]),
         "height": cam.height.getValue() if hasattr(cam, "height") else None,
         "near": cam.nearDistance.getValue(),
         "far": cam.farDistance.getValue(),
@@ -482,10 +493,22 @@ def camera_snapshot(view):
     }
 
 
+def rotation_value(value):
+    """Coin SbRotation from a stored 4-tuple (an SbRotation passes through)."""
+    if isinstance(value, (tuple, list)):
+        from pivy import coin
+        return coin.SbRotation(float(value[0]), float(value[1]),
+                               float(value[2]), float(value[3]))
+    return value
+
+
 def camera_restore(view, snap):
+    """Put back angle, zoom, centering and clipping planes of a snapshot."""
+    from pivy import coin
     cam = view.getCameraNode()
-    cam.position.setValue(snap["position"])
-    cam.orientation.setValue(snap["orientation"])
+    p = snap["position"]
+    cam.position.setValue(coin.SbVec3f(float(p[0]), float(p[1]), float(p[2])))
+    cam.orientation.setValue(rotation_value(snap["orientation"]))
     if snap["height"] is not None and hasattr(cam, "height"):
         cam.height.setValue(snap["height"])
     cam.nearDistance.setValue(snap["near"])
@@ -513,7 +536,7 @@ def frame_on_final_part(doc, tl, view, outer_attempts=6):
     want = saved["direction"]
     for attempt in range(outer_attempts):
         cam = view.getCameraNode()
-        cam.orientation.setValue(saved["orientation"])
+        cam.orientation.setValue(rotation_value(saved["orientation"]))
         pump()
         got = FreeCAD.Vector(view.getViewDirection())
         if got.dot(want) > 0.999:
@@ -769,6 +792,37 @@ def make_gif(frame_paths, gif_path, duration_ms=700):
 # --------------------------------------------------------------------------
 # the whole run
 # --------------------------------------------------------------------------
+def camera_report(view, snap):
+    """What the framing changed: angle must be untouched, zoom/centering may move."""
+    cam = view.getCameraNode()
+    got = FreeCAD.Vector(view.getViewDirection())
+    want = snap["direction"]
+    if got.Length > 0 and want.Length > 0:
+        cos = got.normalize().dot(want.normalize())
+        offset = math.degrees(math.acos(max(-1.0, min(1.0, cos))))
+    else:
+        offset = None
+    pos = cam.position.getValue()
+    p0 = snap["position"]
+    report = {
+        "angle_offset_deg": None if offset is None else round(offset, 6),
+        "angle_preserved": offset is not None and offset < 0.01,
+        "zoom_before": None if snap["height"] is None else round(snap["height"], 3),
+        "zoom_capture": (round(cam.height.getValue(), 3)
+                         if hasattr(cam, "height") else None),
+        "centering_mm": round(math.sqrt((pos[0] - p0[0]) ** 2 +
+                                        (pos[1] - p0[1]) ** 2 +
+                                        (pos[2] - p0[2]) ** 2), 3),
+    }
+    if offset is not None:
+        log("camera: angle offset %.6f deg (preserved=%s), zoom %s -> %s, "
+            "centering moved %s mm" % (report["angle_offset_deg"],
+                                       report["angle_preserved"],
+                                       report["zoom_before"], report["zoom_capture"],
+                                       report["centering_mm"]))
+    return report
+
+
 def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
                     hide_panel=None, background="White"):
     """Frame the final part, sweep every step, capture, assemble the GIF."""
@@ -798,6 +852,7 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
         frame_on_final_part(doc, tl, view, outer_attempts=6)
         width, height = image_size(view, max_px=max_px)
         result["frame_size"] = [width, height]
+        result["camera"] = camera_report(view, saved_camera)
 
         previous = None
         previous_volumes = {}
@@ -1157,6 +1212,7 @@ if GUI:
         def create_gif(self):
             if self.busy:
                 return
+            ok = False
             try:
                 self.busy = True
                 self.gif_btn.setEnabled(False)
@@ -1171,14 +1227,22 @@ if GUI:
                 if result.get("flat_frames"):
                     note = "\nnote: frame(s) %s look identical to the previous one" % (
                         ", ".join(str(i) for i in result["flat_frames"]))
+                cam = result.get("camera") or {}
+                camnote = ""
+                if cam.get("angle_offset_deg") is not None:
+                    camnote = ("\ncamera: viewing angle %s (%.4f deg), zoom %s -> %s, "
+                               "centering moved %s mm"
+                               % ("kept" if cam["angle_preserved"] else "CHANGED",
+                                  cam["angle_offset_deg"], cam.get("zoom_before"),
+                                  cam.get("zoom_capture"), cam.get("centering_mm")))
                 self.status.setText(
-                    "GIF written: %s\n%d frames, %s, %s s%s"
+                    "GIF written: %s\n%d frames, %s, %s s%s%s"
                     % (result["gif"], result["gif_info"]["frames_in_gif"],
                        "x".join(str(v) for v in result["gif_info"]["size"]),
-                       result["seconds"], note))
+                       result["seconds"], note, camnote))
                 log("GIF: " + result["gif"])
                 self.snapshot = snapshot_state(self.doc)
-                self.set_level(self.level)
+                ok = True
             except Exception as exc:
                 self.status.setText("GIF failed: %s" % exc)
                 warn("GIF failed: %s" % exc)
@@ -1186,6 +1250,12 @@ if GUI:
             finally:
                 self.busy = False
                 self.gif_btn.setEnabled(True)
+                if ok:
+                    # re-apply the level the user was browsing and keep the run
+                    # summary in the status line (set_level would overwrite it)
+                    summary = self.status.text()
+                    self.set_level(self.level)
+                    self.status.setText(summary)
 
         def open_gif(self):
             """Show the folder that holds the GIF and play the GIF itself."""
