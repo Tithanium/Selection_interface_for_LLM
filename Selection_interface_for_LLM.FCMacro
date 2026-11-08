@@ -1,0 +1,91 @@
+# -*- coding: utf-8 -*-
+"""Selection_interface_for_LLM.FCMacro
+
+Progressive-build timelapse for PartDesign documents.
+Install:  %APPDATA%\\FreeCAD\\v<X-Y>\\Macro\\Selection_interface_for_LLM.FCMacro   (this file)
+          %APPDATA%\\FreeCAD\\v<X-Y>\\Macro\\Selection_interface_for_LLM\\selection_interface_for_llm_lib.py
+
+Run: Macro -> Macros... -> Selection_interface_for_LLM -> Execute
+The panel lists the exact computation order of the tree; "< step" / "step >"
+walk it, "create GIF (all steps)" writes one PNG per step plus a GIF in
+Downloads\\FreeCAD_timelapse\\<document>_<stamp>\\.
+
+The macro never saves the document. It snapshots the tips/visibility on open and
+restores them on close or on "restore original".
+"""
+
+import os
+import sys
+import traceback
+
+LIB_NAME = "Selection_interface_for_LLM"
+
+
+def _candidate_dirs():
+    """Every place the library may live, with the reason, in priority order."""
+    out = []
+    override = globals().get("LIB_DIR_OVERRIDE")
+    if override:
+        out.append((override, "LIB_DIR_OVERRIDE"))
+    try:
+        here = os.path.dirname(os.path.abspath(globals()["__file__"]))
+        out.append((os.path.join(here, LIB_NAME), "__file__ sibling"))
+    except Exception:
+        pass
+    try:
+        import FreeCAD
+        for flag, label in ((True, "getUserMacroDir(True)"),
+                            (False, "getUserMacroDir(False)")):
+            try:
+                folder = FreeCAD.getUserMacroDir(flag)
+            except Exception:
+                continue
+            if folder:
+                out.append((os.path.join(folder, LIB_NAME), label + " child"))
+                out.append((folder, label + " root"))
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            out.append((os.path.join(appdata, "FreeCAD", "Mod", LIB_NAME),
+                        "%APPDATA%\\FreeCAD\\Mod"))
+            import glob
+            for found in sorted(glob.glob(os.path.join(appdata, "FreeCAD", "v*",
+                                                       "Macro", LIB_NAME)),
+                                reverse=True):
+                out.append((found, "v*\\Macro glob (newest first)"))
+    except Exception:
+        pass
+    return out
+
+
+def _find_library():
+    tried = []
+    for folder, why in _candidate_dirs():
+        tried.append("  %-46s  (%s)" % (folder, why))
+        path = os.path.join(folder, "selection_interface_for_llm_lib.py")
+        if os.path.isfile(path):
+            return folder, path, tried
+    raise RuntimeError(
+        "selection_interface_for_llm_lib.py not found. Paths tried:\n" + "\n".join(tried) +
+        "\nFix: copy the Selection_interface_for_LLM folder next to Selection_interface_for_LLM.FCMacro "
+        "inside the user macro directory.")
+
+
+def main():
+    folder, path, tried = _find_library()
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
+    import importlib
+    if "selection_interface_for_llm_lib" in sys.modules:
+        lib = importlib.reload(sys.modules["selection_interface_for_llm_lib"])
+    else:
+        lib = importlib.import_module("selection_interface_for_llm_lib")
+    lib.log("library %s (v%s)" % (path, getattr(lib, "VERSION", "?")))
+    lib.open_panel()
+
+
+try:
+    main()
+except Exception as exc:
+    import FreeCAD
+    FreeCAD.Console.PrintError("[selection] %s\n" % exc)
+    traceback.print_exc(file=sys.stdout)
