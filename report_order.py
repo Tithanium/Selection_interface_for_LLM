@@ -57,6 +57,7 @@ def main():
     ok = bool(timeline["steps"]) and not any("!= tip chain" in w
                                              for w in timeline["warnings"])
     print("RESULT: %s" % ("PASS" if ok else "FAIL"))
+    sys.stdout.flush()          # freecadcmd drops whatever is still buffered at exit
     return 0 if ok else 1
 
 
