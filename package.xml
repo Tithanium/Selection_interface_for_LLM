@@ -6,8 +6,8 @@
   <!--[ Info ]-->
 
   <name>Selection interface for LLM</name>
-  <description>Steps through the real computation order of a PartDesign document: shows one feature at a time, datum planes and the driving sketch included, without modifying the document; keeps the viewing angle and exports the build-up as a GIF; and copies a ready-to-use description of one feature to the clipboard for an LLM.</description>
-  <version>2.1.0</version>
+  <description>Build timeline of a PartDesign document: lists the real construction order of every feature, shows them one at a time (datum planes and the driving sketch included) without modifying your model, replays the build-up as an animated GIF that keeps your viewing angle, and copies a ready-to-paste description of one feature for an LLM.</description>
+  <version>2.1.1</version>
   <date>2026-11-08</date>
 
   <!--[ Ecosystem requirements ]-->
@@ -19,8 +19,11 @@
 
   <tag>PartDesign</tag>
   <tag>Animation</tag>
-  <tag>Documentation</tag>
+  <tag>Timelapse</tag>
+  <tag>Sketch</tag>
+  <tag>GIF</tag>
   <tag>LLM</tag>
+  <tag>Documentation</tag>
 
   <!--[ Maintainers and authors ]-->
 

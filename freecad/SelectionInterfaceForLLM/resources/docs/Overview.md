@@ -53,3 +53,9 @@ commands *Building steps panel* and *GIF of the whole build*.
 
 FreeCAD 1.1 or newer, Python 3.10+. Pillow and NumPy are used for the GIF and for
 the frame metrics; both ship with FreeCAD's own Python, nothing has to be installed.
+
+## Search words
+
+build order, construction order, build timeline, timelapse, time-lapse, feature by
+feature, step by step, animation, GIF, datum plane, driving sketch, LLM, PartDesign,
+workbench, addon.
