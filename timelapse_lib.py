@@ -49,7 +49,7 @@ except Exception:  # pragma: no cover - headless
     FreeCADGui = None
     GUI = False
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 LIB_NAME = "Timelapse_Features"
 DOCK_NAME = "Timelapse_Features_Dock"
 PANEL_NAME = "Timelapse_Features_Panel"
@@ -58,10 +58,6 @@ GIF_PREVIEW_NAME = "Timelapse_GifPreview"
 # object types that are never a "building step" of the shape
 SKIP_TYPES = {
     "PartDesign::Body",
-    "PartDesign::Plane",
-    "PartDesign::Line",
-    "PartDesign::Point",
-    "PartDesign::CoordinateSystem",
     "App::Origin",
     "App::Line",
     "App::Plane",
@@ -70,9 +66,25 @@ SKIP_TYPES = {
     "App::DocumentObjectGroup",
     "App::FeaturePython",
     "App::Link",
-    "Part::Datum",
 }
 SKIP_PREFIXES = ("Sketcher::", "TechDraw::", "Spreadsheet::", "Fem::", "Mesh::")
+
+# datums are not shaped like a part but the user must be able to see them
+DATUM_TYPES = ("PartDesign::Plane", "PartDesign::Line", "PartDesign::Point",
+               "PartDesign::CoordinateSystem")
+
+# display choices of the panel: label -> (DisplayMode, Transparency)
+# (a Body's ViewObject offers exactly Flat Lines / Shaded / Wireframe / Points)
+DISPLAY_MODES = (
+    ("solid + edges", "Flat Lines", 0),
+    ("solid", "Shaded", 0),
+    ("edges only", "Wireframe", 0),
+    ("transparent", "Flat Lines", 80),
+    ("points", "Points", 0),
+)
+SKETCH_LINE_WIDTH = 3.0
+SKETCH_LINE_COLOR = (1.0, 0.45, 0.0)      # the profile of the selected feature
+PROFILE_TRANSPARENCY = 70                  # see the profile through the material
 
 
 # --------------------------------------------------------------------------
@@ -146,11 +158,43 @@ def tip_chain(body):
     return chain
 
 
+def is_datum(obj):
+    """A datum plane / line / point / coordinate system (no solid of its own)."""
+    return obj.TypeId.startswith("Part::Datum") or obj.TypeId in DATUM_TYPES
+
+
+def is_sketch(obj):
+    return obj.TypeId.startswith("Sketcher::")
+
+
+def profile_object(obj):
+    """The sketch that gives birth to a feature, when there is one."""
+    for attr in ("Profile", "Sketch"):
+        got = _deref(getattr(obj, attr, None))
+        if got is not None and is_sketch(got):
+            return got
+    return None
+
+
+def solid_volume(obj):
+    """Volume of a real solid, or None (a datum plane has a silly huge volume)."""
+    shape = getattr(obj, "Shape", None)
+    try:
+        if shape is None or shape.isNull() or not shape.Solids:
+            return None
+        volume = float(shape.Volume)
+    except Exception:
+        return None
+    return volume if 0.0 < volume < 1e9 else None
+
+
 def is_build_object(obj):
     if obj.TypeId in SKIP_TYPES:
         return False
     if obj.TypeId.startswith(SKIP_PREFIXES):
         return False
+    if is_datum(obj):
+        return True
     shape = getattr(obj, "Shape", None)
     if shape is None:
         return False
@@ -217,6 +261,7 @@ def timeline(doc):
                 owner = body.Name
                 break
         profile = _step_source(obj)
+        sketch = profile_object(obj)
         steps.append({
             "index": i,
             "name": obj.Name,
@@ -224,6 +269,8 @@ def timeline(doc):
             "type": obj.TypeId,
             "short": short_type(obj.TypeId),
             "body": owner,
+            "datum": is_datum(obj),
+            "sketch": sketch.Name if sketch is not None else None,
             "profile": profile,
             "detail": _detail_string(obj),
             "_obj": obj,
@@ -281,9 +328,25 @@ def _detail_string(obj):
 # --------------------------------------------------------------------------
 # state: display the document at level k
 # --------------------------------------------------------------------------
+def _view_get(vo, attr):
+    try:
+        if not hasattr(vo, attr):
+            return None
+        return getattr(vo, attr)
+    except Exception:
+        return None
+
+
+def _color_tuple(color):
+    try:
+        return tuple(round(float(c), 4) for c in (color[0], color[1], color[2]))
+    except Exception:
+        return None
+
+
 def snapshot_state(doc):
-    """Remember tips and visibility so the macro can leave no trace."""
-    snap = {"tips": {}, "visible": {}, "display_mode_body": {}}
+    """Remember tips, visibility, render mode and sketch colours (no trace left)."""
+    snap = {"tips": {}, "view": {}, "display_mode_body": {}}
     for body in body_objects(doc):
         tip = _deref(getattr(body, "Tip", None))
         snap["tips"][body.Name] = tip.Name if tip is not None else None
@@ -291,15 +354,19 @@ def snapshot_state(doc):
         vo = getattr(obj, "ViewObject", None)
         if vo is None:
             continue
-        try:
-            snap["visible"][obj.Name] = bool(vo.Visibility)
-        except Exception:
-            pass
-        if hasattr(vo, "DisplayModeBody"):
-            try:
-                snap["display_mode_body"][obj.Name] = vo.DisplayModeBody
-            except Exception:
-                pass
+        entry = {}
+        for attr in ("Visibility", "DisplayMode", "Transparency", "LineWidth"):
+            value = _view_get(vo, attr)
+            if value is not None:
+                entry[attr] = value
+        color = _color_tuple(_view_get(vo, "LineColor"))
+        if color is not None:
+            entry["LineColor"] = color
+        if entry:
+            snap["view"][obj.Name] = entry
+        mode = _view_get(vo, "DisplayModeBody")
+        if mode is not None:
+            snap["display_mode_body"][obj.Name] = mode
     return snap
 
 
@@ -316,12 +383,18 @@ def restore_state(doc, snap):
                 body.Tip = tip
             except Exception as exc:
                 problems.append("%s.Tip: %s" % (name, exc))
-    for name, visible in snap.get("visible", {}).items():
+    view = snap.get("view")
+    if view is None:                       # snapshot taken by an older version
+        view = {name: {"Visibility": value}
+                for name, value in snap.get("visible", {}).items()}
+    for name, entry in view.items():
         obj = doc.getObject(name)
         vo = getattr(obj, "ViewObject", None) if obj is not None else None
-        if vo is not None:
+        if vo is None:
+            continue
+        for attr, value in entry.items():
             try:
-                vo.Visibility = visible
+                setattr(vo, attr, value)
             except Exception:
                 pass
     for name, mode in snap.get("display_mode_body", {}).items():
@@ -338,65 +411,198 @@ def restore_state(doc, snap):
     return problems
 
 
-def current_volumes(doc):
-    """Volume of the tip shape of every body: proof that a step did something
-    even when the change is hidden from the current viewing angle."""
+def current_volumes(doc, tl=None, level=None):
+    """Volume of the shape on screen for every body: proof that a step did
+    something even when the change is hidden from the current viewing angle."""
     out = {}
+    if tl is not None and level is not None:
+        for step in (tl.get("steps") or []):
+            if step["index"] > level or not step["body"] or step.get("datum"):
+                continue
+            volume = solid_volume(step["_obj"])
+            if volume is not None:
+                out[step["body"]] = round(volume, 6)
+        return out
     for body in body_objects(doc):
         tip = _deref(getattr(body, "Tip", None))
-        if tip is None:
-            continue
-        shape = getattr(tip, "Shape", None)
-        if shape is None:
-            continue
-        try:
-            if shape.isNull():
-                continue
-            out[body.Name] = round(float(shape.Volume), 6)
-        except Exception:
-            continue
+        if tip is not None:
+            volume = solid_volume(tip)
+            if volume is not None:
+                out[body.Name] = round(volume, 6)
     return out
 
 
-def apply_level(doc, tl, level, recompute=True):
-    """Show the part as it was after `level` building steps (0 = nothing yet)."""
+def display_mode_spec(label):
+    """Panel label -> (DisplayMode, Transparency)."""
+    for name, mode, transparency in DISPLAY_MODES:
+        if name == label:
+            return mode, transparency
+    return DISPLAY_MODES[0][1], DISPLAY_MODES[0][2]
+
+
+def apply_display_mode(doc, label, only_visible=False, extra_transparency=0):
+    """Render every part as solid, edges only, transparent ... (never geometry)."""
+    mode, transparency = display_mode_spec(label)
+    transparency = max(transparency, extra_transparency)
+    changed = 0
+    for obj in doc.Objects:
+        vo = getattr(obj, "ViewObject", None)
+        if vo is None or is_datum(obj) or is_sketch(obj):
+            continue
+        if only_visible:
+            try:
+                if not vo.Visibility:
+                    continue
+            except Exception:
+                pass
+        try:
+            allowed = list(vo.getEnumerationsOfProperty("DisplayMode"))
+        except Exception:
+            allowed = []
+        wanted = mode if (not allowed or mode in allowed) else allowed[0]
+        for attr, value in (("DisplayMode", wanted), ("Transparency", transparency)):
+            try:
+                if _view_get(vo, attr) != value:
+                    setattr(vo, attr, value)
+                    changed += 1
+            except Exception:
+                pass
+    return changed
+
+
+def _sketch_highlight(vo):
+    """Make the profile of the selected feature stand out from the solid."""
+    for attr, value in (("LineWidth", SKETCH_LINE_WIDTH),
+                        ("LineColor", SKETCH_LINE_COLOR)):
+        try:
+            setattr(vo, attr, value)
+        except Exception:
+            pass
+
+
+def see_through_body(doc, step, value=PROFILE_TRANSPARENCY):
+    """Make the body of the selected feature semi-transparent, so that the sketch
+    lying inside the material is visible (a profile revolved inside a solid is
+    invisible otherwise)."""
+    if step is None:
+        return 0
+    names = set()
+    body = step.get("body")
+    body_obj = doc.getObject(body) if body else None
+    if body_obj is not None:
+        for obj in list(getattr(body_obj, "Group", []) or []):
+            names.add(obj.Name)
+    if step.get("name"):
+        names.add(step["name"])
+    touched = 0
+    for name in names:
+        obj = doc.getObject(name)
+        if obj is None or is_datum(obj) or is_sketch(obj):
+            continue
+        vo = getattr(obj, "ViewObject", None)
+        if vo is None:
+            continue
+        try:
+            current = int(vo.Transparency or 0)
+            if current < value:
+                vo.Transparency = value
+                touched += 1
+        except Exception:
+            pass
+    return touched
+
+
+def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
+                see_through=True):
+    """Show the part as it was after `level` building steps (0 = nothing yet).
+
+    Only view properties change: the model is never touched. Every body is put in
+    DisplayModeBody 'Through', where each feature is drawn only when its own
+    ViewObject is visible -- in 'Tip' mode the tip is always drawn, which would
+    hide a datum plane or a sketch belonging to the level being looked at. Only
+    the last built feature of each body is visible, datums appear when their step
+    is reached, and the sketch behind the selected feature is shown, highlighted.
+    """
     steps = tl["steps"]
     total = len(steps)
     level = max(0, min(int(level), total))
-    per_body = {}
+
+    last_built = {}
     for step in steps:
-        if step["body"]:
-            per_body.setdefault(step["body"], []).append((step["index"], step["_obj"]))
+        if step["index"] <= level and step["body"] and not step["datum"]:
+            last_built[step["body"]] = step["name"]
+
+    current = None
+    for step in steps:
+        if step["index"] == level:
+            current = step
+            break
 
     for body in body_objects(doc):
         vo = getattr(body, "ViewObject", None)
-        built = [obj for (idx, obj) in per_body.get(body.Name, []) if idx <= level]
-        if built:
-            try:
-                body.Tip = built[-1]
-            except Exception as exc:
-                warn("cannot set tip of %s to %s: %s" % (body.Name, built[-1].Name, exc))
-                continue
-            if vo is not None:
-                if hasattr(vo, "DisplayModeBody"):
-                    try:
-                        vo.DisplayModeBody = "Tip"
-                    except Exception:
-                        pass
-                vo.Visibility = True
-        elif vo is not None:
-            vo.Visibility = False
-
-    for step in steps:
-        if step["body"]:
+        if vo is None:
             continue
-        vo = getattr(step["_obj"], "ViewObject", None)
-        if vo is not None:
+        if hasattr(vo, "DisplayModeBody"):
             try:
-                vo.Visibility = step["index"] <= level
+                vo.DisplayModeBody = "Through"
             except Exception:
                 pass
+        try:
+            vo.Visibility = True       # children only render under a visible body
+        except Exception:
+            pass
 
+    # a hidden App::Part / group hides every child: keep the containers open
+    for group in doc.Objects:
+        if group.TypeId not in ("App::Part", "App::DocumentObjectGroup"):
+            continue
+        gvo = getattr(group, "ViewObject", None)
+        if gvo is None:
+            continue
+        try:
+            gvo.Visibility = True
+        except Exception:
+            pass
+
+    shown = 0
+    for step in steps:
+        vo = getattr(step["_obj"], "ViewObject", None)
+        if vo is None:
+            continue
+        if step["datum"]:
+            wanted = step["index"] <= level
+        elif step["body"]:
+            wanted = last_built.get(step["body"]) == step["name"]
+        else:
+            wanted = step["index"] <= level
+        try:
+            vo.Visibility = wanted
+            shown += 1 if wanted else 0
+        except Exception:
+            pass
+
+    # the sketch behind the selected feature: shown alone and highlighted
+    focus = profile_object(current["_obj"]) if (current is not None and show_sketch) else None
+    for step in steps:
+        sketch = profile_object(step["_obj"])
+        if sketch is None:
+            continue
+        svo = getattr(sketch, "ViewObject", None)
+        if svo is None:
+            continue
+        wanted = sketch is focus
+        try:
+            svo.Visibility = wanted
+        except Exception:
+            pass
+        if wanted:
+            _sketch_highlight(svo)
+
+    if mode:
+        # a profile inside the material is only visible through a see-through body
+        apply_display_mode(doc, mode)
+        if focus is not None and see_through:
+            see_through_body(doc, current)
     if recompute:
         doc.recompute()
     return level
@@ -453,20 +659,42 @@ def active_view():
     return view
 
 
+def _subwindow_label(sub):
+    """Tab title without the ': 1*' suffix FreeCAD appends."""
+    title = (sub.windowTitle() or "").strip()
+    for sep in (":", "*"):
+        if sep in title:
+            title = title.split(sep)[0]
+    return title.strip()
+
+
 def front_document(doc):
-    """The tab in front decides what a capture shows."""
+    """The tab in front decides what a capture shows: match it by exact name.
+
+    Matching the first 12 characters of the file name made two documents named
+    ..._cardanV2 / ..._cardanV3 select the wrong tab (measured).
+    """
     if not GUI:
         return
     mw = FreeCADGui.getMainWindow()
-    stem = (doc.FileName or "").replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
     for sub in mw.findChildren(QtWidgets.QMdiSubWindow):
         if (sub.windowTitle() or "").strip() == "Start":
             sub.close()
+    stem = (doc.FileName or "").replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    wanted = {doc.Name, doc.Label or "", stem}
+    if doc.Name.startswith("_"):
+        wanted.add(doc.Name[1:])
+    wanted.discard("")
     for sub in mw.findChildren(QtWidgets.QMdiSubWindow):
-        title = sub.windowTitle() or ""
-        if doc.Name in title or (stem and stem[:12] in title):
+        if _subwindow_label(sub) in wanted:
             mw.setActiveSubWindow(sub)
             sub.widget().setFocus()
+            break
+    try:
+        FreeCAD.setActiveDocument(doc.Name)
+        FreeCADGui.ActiveDocument = FreeCADGui.getDocument(doc.Name)
+    except Exception:
+        pass
     mw.activateWindow()
     mw.raise_()
     pump()
@@ -525,11 +753,11 @@ def animation_duration(value=None):
     return old
 
 
-def frame_on_final_part(doc, tl, view, outer_attempts=6):
+def frame_on_final_part(doc, tl, view, outer_attempts=6, mode=None):
     """Fit the view on the COMPLETE part, then re-apply the user's angle."""
     settle_view(view)
     saved = camera_snapshot(view)
-    apply_level(doc, tl, len(tl["steps"]))
+    apply_level(doc, tl, len(tl["steps"]), mode=mode, see_through=False)
     pump()
     view.fitAll()
     pump(3)
@@ -824,7 +1052,7 @@ def camera_report(view, snap):
 
 
 def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
-                    hide_panel=None, background="White"):
+                    hide_panel=None, background="White", mode=None):
     """Frame the final part, sweep every step, capture, assemble the GIF."""
     if not GUI:
         raise RuntimeError("GIF generation needs the FreeCAD GUI (saveImage)")
@@ -838,7 +1066,8 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
     saved_camera = camera_snapshot(view)
     old_anim = animation_duration(0)
     started = time.time()
-    result = {"doc": doc.Name, "steps": len(steps), "frames": [], "warnings": []}
+    result = {"doc": doc.Name, "steps": len(steps), "frames": [], "warnings": [],
+              "display": mode or DISPLAY_MODES[0][0]}
     try:
         front_document(doc)
         if hide_panel is not None:
@@ -849,7 +1078,7 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
         result["outdir"] = out
         result["frames_dir"] = frames_dir
 
-        frame_on_final_part(doc, tl, view, outer_attempts=6)
+        frame_on_final_part(doc, tl, view, outer_attempts=6, mode=mode)
         width, height = image_size(view, max_px=max_px)
         result["frame_size"] = [width, height]
         result["camera"] = camera_report(view, saved_camera)
@@ -857,13 +1086,13 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
         previous = None
         previous_volumes = {}
         for step in steps:
-            level = apply_level(doc, tl, step["index"])
+            level = apply_level(doc, tl, step["index"], mode=mode, see_through=False)
             pump(3)
             name = "frame_%03d_%s.png" % (step["index"], _file_safe(step["label"]))
             path = os.path.join(frames_dir, name)
             stats = capture_view(view, path, width, height, background)
             current = gray_array(path)
-            volumes = current_volumes(doc)
+            volumes = current_volumes(doc, tl, step["index"])
             if previous is None:
                 delta = None
             elif previous.shape == current.shape:
@@ -881,12 +1110,17 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
             result["frames"].append({
                 "index": step["index"], "level": level, "label": step["label"],
                 "name": step["name"], "type": step["type"], "profile": step["profile"],
-                "detail": step["detail"], "file": os.path.basename(path),
+                "detail": step["detail"], "datum": bool(step.get("datum")),
+                "sketch": step.get("sketch"),
+                "file": os.path.basename(path),
                 "path": path, "pixels": stats, "progress": round(progress, 4),
                 "change_vs_previous": delta,
                 "volumes": volumes,
+                # a datum has no volume: it counts as shown even when the plane is
+                # edge-on or coplanar and therefore adds no pixel (warned below)
                 "changed": None if previous is None else (
                     (delta is None or delta >= 0.0005) or volumes != previous_volumes
+                    or bool(step.get("datum"))
                 ),
             })
             previous_volumes = volumes
@@ -909,13 +1143,24 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
         result["silent_frames"] = silent
         if silent:
             result["warnings"].append(
-                "frame(s) %s changed neither the pixels nor the volume: set_tip did "
-                "nothing there" % ", ".join(str(i) for i in silent))
+                "frame(s) %s changed neither the pixels nor the volume: that step "
+                "adds nothing visible from this angle"
+                % ", ".join(str(i) for i in silent))
         if flat:
-            result["warnings"].append(
-                "frame(s) %s look identical to their predecessor: the geometry that "
-                "changed there is hidden from this angle (interior feature)"
-                % ", ".join(str(i) for i in flat))
+            hidden = [i for i in flat
+                      if not (result["frames"][i - 1].get("datum"))]
+            datum_flat = [i for i in flat
+                          if result["frames"][i - 1].get("datum")]
+            if hidden:
+                result["warnings"].append(
+                    "frame(s) %s look identical to their predecessor: the geometry that "
+                    "changed there is hidden from this angle (interior feature)"
+                    % ", ".join(str(i) for i in hidden))
+            if datum_flat:
+                result["warnings"].append(
+                    "frame(s) %s show a datum plane that adds no pixel: it is edge-on "
+                    "or coplanar with a plane already shown from this angle"
+                    % ", ".join(str(i) for i in datum_flat))
         _write_manifest(result, tl)
     finally:
         restore_state(doc, snap)
@@ -1131,13 +1376,15 @@ def build_llm_prompt(doc, tl, step, request, new_path=None):
             tip_obj = last_of_body.get("_obj") or doc.getObject(last_of_body["name"])
         if tip_obj is not None:
             tip = tip_obj.Name
-            if tip_obj.Shape and tip_obj.Shape.Volume:
-                vol_final = "%.3f mm3" % tip_obj.Shape.Volume
+            volume = solid_volume(tip_obj)
+            if volume is not None:
+                vol_final = "%.3f mm3" % volume
     except Exception:
         pass
     try:
-        if obj is not None and obj.Shape and obj.Shape.Volume:
-            vol_step = "%.3f mm3" % obj.Shape.Volume
+        volume = solid_volume(obj) if obj is not None else None
+        if volume is not None:
+            vol_step = "%.3f mm3" % volume
     except Exception:
         vol_step = ""
     version = ".".join(str(v) for v in FreeCAD.Version()[0:3])
@@ -1195,10 +1442,13 @@ def build_llm_prompt(doc, tl, step, request, new_path=None):
     lines.append("")
     lines.append("4. COMPUTATION ORDER OF THE DOCUMENT (first feature to last; >> marks "
                  "the feature above)")
+    w_label = min(32, max([len(s["label"]) for s in steps] + [10]))
+    w_type = min(30, max([len(s["type"]) for s in steps] + [12]))
     for s in steps:
-        lines.append("   %s%2d  %-16s %-26s %s"
+        lines.append("   %s%2d  %-*s  %-*s  %s"
                      % (">>" if s["index"] == step.get("index") else "  ",
-                        s["index"], s["label"], s["type"], s["profile"] or ""))
+                        s["index"], w_label, s["label"], w_type, s["type"],
+                        s["profile"] or ""))
     lines.append("")
     lines.append("5. MODIFICATION REQUESTED BY THE USER (verbatim)")
     for text in (request or "(no modification text was given)").splitlines():
@@ -1322,6 +1572,7 @@ if GUI:
             self.last_result = None
             self.last_prompt = ""
             self.last_prompt_path = ""
+            self.display = DISPLAY_MODES[0][0]
             self._build_ui()
             self.refresh(initial=True)
 
@@ -1334,6 +1585,17 @@ if GUI:
             self.header = QtWidgets.QLabel("no document")
             self.header.setWordWrap(True)
             outer.addWidget(self.header)
+
+            top = QtWidgets.QHBoxLayout()
+            label = QtWidgets.QLabel("display:")
+            self.mode_box = QtWidgets.QComboBox()
+            self.mode_box.setObjectName("Timelapse_DisplayMode")
+            self.mode_box.addItems([name for (name, _m, _t) in DISPLAY_MODES])
+            self.mode_box.setToolTip("How the parts are rendered: solid, edges only, "
+                                    "transparent ...")
+            top.addWidget(label)
+            top.addWidget(self.mode_box, 1)
+            outer.addLayout(top)
 
             self.list = QtWidgets.QTreeWidget()
             self.list.setObjectName("Timelapse_StepList")
@@ -1414,6 +1676,7 @@ if GUI:
             self.gif_btn.clicked.connect(self.create_gif)
             self.open_btn.clicked.connect(self.open_gif)
             self.prompt_btn.clicked.connect(self.copy_llm_prompt)
+            self.mode_box.currentTextChanged.connect(self.set_display_mode)
             self.list.currentItemChanged.connect(self._on_item)
 
         # -- model state ----------------------------------------------
@@ -1448,6 +1711,9 @@ if GUI:
             self.spin.blockSignals(True)
             self.spin.setRange(0, len(steps))
             self.spin.setValue(max(0, min(self.level, len(steps))))
+            self.mode_box.blockSignals(True)
+            self.mode_box.setCurrentText(self.display)
+            self.mode_box.blockSignals(False)
             self.spin.blockSignals(False)
             for warning in self.tl["warnings"]:
                 log("warning: " + warning)
@@ -1457,7 +1723,7 @@ if GUI:
             if self.busy or not self.tl:
                 return
             level = max(0, min(int(level), self.count()))
-            self.level = apply_level(self.doc, self.tl, level)
+            self.level = apply_level(self.doc, self.tl, level, mode=self.display)
             pump()
             self.spin.blockSignals(True)
             self.spin.setValue(self.level)
@@ -1475,15 +1741,30 @@ if GUI:
                 info = "level 0: nothing built yet"
             else:
                 step = self.tl["steps"][self.level - 1]
-                volumes = current_volumes(self.doc)
+                volumes = current_volumes(self.doc, self.tl, self.level)
                 tail = ""
                 if volumes:
                     tail = "   |   %.1f mm3" % sum(volumes.values())
                 info = "level %d/%d: %s (%s)%s" % (self.level, self.count(),
                                                    step["label"], step["short"], tail)
+                if step.get("datum"):
+                    info += "   |   datum plane/line shown"
+                if step.get("sketch"):
+                    sketch = self.doc.getObject(step["sketch"])
+                    if sketch is not None:
+                        info += "   |   profile: " + (sketch.Label or sketch.Name)
             if self.tl["warnings"]:
                 info += "  |  %d warning(s), see report view" % len(self.tl["warnings"])
             self.status.setText(info)
+
+        def set_display_mode(self, label):
+            """Solid / edges only / transparent, applied to everything on screen."""
+            self.display = label or DISPLAY_MODES[0][0]
+            if self.doc is None or not self.tl:
+                return
+            self.set_level(self.level)          # re-apply with the new mode
+            pump()
+            self.status.setText("display: %s\n%s" % (self.display, self.status.text()))
 
         def _on_item(self, current, previous=None):
             if self.busy or current is None:
@@ -1510,7 +1791,7 @@ if GUI:
                 self.status.setText("capturing %d frames, the window must stay "
                                     "responsive..." % self.count())
                 QtWidgets.QApplication.processEvents()
-                result = build_timelapse(self.doc, self.tl,
+                result = build_timelapse(self.doc, self.tl, mode=self.display,
                                          hide_panel=self.set_capture_mode)
                 self.last_result = result
                 note = ""

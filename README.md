@@ -17,11 +17,18 @@ export that walk as a GIF.
 ## Use
 
 1. Open the part, `Macro > Macros... > Timelapse_Features.FCMacro > Execute`.
-2. A dock named **Timelapse - building steps** appears on the right. It lists the
-   recovered computation order: `#`, feature label, `type <- what it consumes`.
+2. A dock named **Timelapse - building steps** appears on the right. At the top, the
+   **display** list chooses how everything is drawn: `solid + edges`, `solid`,
+   `edges only`, `transparent`, `points`. Below it, the recovered computation order
+   is listed: `#`, feature label, `type <- what it consumes`. Datum planes, lines,
+   points and coordinate systems are steps like any other feature.
 3. `step >` / `< step`, the spin box, or clicking a row moves the development
-   level: the body `Tip` is moved to that feature and the 3D view shows the part
-   as it was at that moment. `reset` = nothing built, `final` = the finished part.
+   level and the 3D view shows exactly what that level holds: the last built
+   feature of every body, the datums reached so far, and the **sketch that gives
+   birth to the selected feature** (highlighted orange, with its body shown
+   see-through so a profile inside the material is visible). `reset` = nothing
+   built, `final` = the finished part. Nothing in the model is changed: only view
+   properties (visibility, display mode, transparency, sketch colour) are set.
 4. **create GIF (all steps)** frames the final part from the current viewing
    angle, sweeps every step, writes
    `Downloads\FreeCAD_timelapse\<document>_<stamp>\` with
@@ -32,12 +39,37 @@ export that walk as a GIF.
    `open with Windows viewer` buttons there as well. With no run in this session
    it picks the newest GIF under `Downloads\FreeCAD_timelapse\`, preferring one
    made from the active document.
-6. `restore original` (or closing the panel) puts back the tips and visibility the
-   document had before the macro touched it. The document is **never saved**.
+6. `restore original` (or closing the panel) puts back tips, visibility, display
+   mode, transparency and sketch colours the document had before the macro
+   touched it. The document is **never saved**.
 7. Under the buttons, type the change you want in the small text box (e.g.
    `set holes diameter to 5mm`), select the step in the list and click
    **copy to clipboard description for LLM**: a self-contained request is copied,
    ready to paste into an LLM session (see below).
+
+## What "displaying a step" means exactly
+
+A Body in its default `Tip` display mode always draws its tip, whatever is
+visible, so it cannot show a datum plane alone; the panel therefore puts every
+body in `DisplayModeBody = Through` and drives the visibility of each feature
+individually. Measured on this build:
+
+| what must appear | how it is obtained |
+|---|---|
+| the feature built at step k | its own `ViewObject.Visibility = True`, every other feature of that body `False` |
+| a datum plane / line / point | its own visibility once its step is reached (a datum has no solid, and its `Shape.Volume` is meaningless: never used as a measurement) |
+| the sketch behind the feature | shown alone, `LineWidth = 3`, `LineColor` orange, and the body's features set to `Transparency = 70` so a profile buried inside the material still shows |
+| an `App::Part` / group container | kept visible: a hidden container hides all its children (a datum plane inside a hidden container renders nothing at all) |
+
+The panel status names what is on screen, e.g.
+`level 12/66: P01 Piston_and_M5 (Revolution)   |   20427.3 mm3   |   profile: P profil Piston_and_M5`
+and `level 1/66: C Reference_encastrement (DatumPlane)   |   datum plane/line shown`.
+
+All 66 levels of `02_piston_cardanV3` and all 68 of `02_seringue_cardanV3` were
+checked this way (`tl_verify.check`): every datum appears exactly at its level and
+disappears after, exactly the last built feature of each body is drawn, every body
+stays in `Through` mode, and the selected feature's sketch is visible and
+highlighted while no other sketch is (0 failures, 0.5 s and 2.7 s per document).
 
 ## Change one feature with an LLM (copy/paste bridge)
 
@@ -167,3 +199,18 @@ visually: the frames are the evidence.
   model/angle, not a missing frame.
 - PIL and numpy are used from FreeCAD's own bundled Python (Pillow 12 present),
   so the GIF needs no external tool.
+- **The tab in front decides what a capture shows**, and matching it by the first
+  characters of the file name picked the wrong tab between `..._cardanV2` and
+  `..._cardanV3`: the tab label is now compared exactly (tab titles carry a
+  `: 1*` suffix that must be stripped) and the document is made active
+  explicitly before any capture.
+- A `Body` in `DisplayModeBody = 'Tip'` draws its tip no matter what, so datums and
+  sketches cannot be displayed with it; the panel uses `'Through'` plus per-feature
+  visibility. A `Body` also needs `Visibility = True` for its children to render at
+  all, and a hidden `App::Part` hides every child of it (measured: a fully visible
+  datum plane inside a hidden container produced a completely blank frame).
+- Transparency lives on the **feature's** view provider in `Through` mode, not on
+  the body, so `see_through_body()` raises it on every member of the body's group.
+- In the GIF, a datum plane seen edge-on adds no pixel and a later step whose
+  change is hidden is flat: both are reported in the warnings, and a datum frame is
+  never counted as a step that "did nothing" (a datum has no volume to move).

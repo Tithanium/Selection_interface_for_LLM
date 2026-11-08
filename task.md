@@ -26,6 +26,7 @@ tree step, and the frames themselves show the part growing.
 | 4 | GIF (`build_timelapse`) | `check_timelapse.py <outdir>` → `RESULT: PASS`, N frames, N = number of tree steps |
 | 4b | `open GIF` button | one click shows the GIF playing in a FreeCAD window (`QMovie` frame count = N) and opens the run folder in Explorer with the file selected |
 | 4c | LLM bridge (note box + `copy to clipboard description for LLM`) | copy the request for step 3 with `set holes diameter to 5mm`, paste it into a fresh `pi` session: the prompt names the folder, the file, the ban on modifying it and the new file name, the feature type and its sketch; the session delivers `<stem>_modified.FCStd` with the right dimension changed while the source SHA256 is unchanged |
+| 4d | display of every listed entity (display list + `apply_level`) | on `02_piston_cardanV3` and `02_seringue_cardanV3`, walk all 66 / 68 levels: each datum is visible exactly at its level, exactly the last built feature of each body is drawn, the selected feature's sketch is shown highlighted while no other sketch is, and the `display` list switches the render (measured: `edges only` 40395 non-white px vs `solid + edges` 57179 at the final level) |
 | 5 | accessibility | `Macro > Macros...` lists `Timelapse_Features.FCMacro` and it runs from there |
 | 6 | evidence | every frame that goes into the GIF is inspected as an image; the GIF itself is never used as evidence, only its frame count is machine-checked |
 
