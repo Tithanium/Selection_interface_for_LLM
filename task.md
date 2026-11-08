@@ -25,6 +25,7 @@ tree step, and the frames themselves show the part growing.
 | 3 | panel (`open_panel`) | dock titled "Timelapse - building steps" appears, lists N rows, `< step` / `step >` / list click / reset / final all move the level; closing restores the original tips |
 | 4 | GIF (`build_timelapse`) | `check_timelapse.py <outdir>` → `RESULT: PASS`, N frames, N = number of tree steps |
 | 4b | `open GIF` button | one click shows the GIF playing in a FreeCAD window (`QMovie` frame count = N) and opens the run folder in Explorer with the file selected |
+| 4c | LLM bridge (note box + `copy to clipboard description for LLM`) | copy the request for step 3 with `set holes diameter to 5mm`, paste it into a fresh `pi` session: the prompt names the folder, the file, the ban on modifying it and the new file name, the feature type and its sketch; the session delivers `<stem>_modified.FCStd` with the right dimension changed while the source SHA256 is unchanged |
 | 5 | accessibility | `Macro > Macros...` lists `Timelapse_Features.FCMacro` and it runs from there |
 | 6 | evidence | every frame that goes into the GIF is inspected as an image; the GIF itself is never used as evidence, only its frame count is machine-checked |
 

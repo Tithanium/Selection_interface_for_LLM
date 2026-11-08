@@ -49,7 +49,7 @@ except Exception:  # pragma: no cover - headless
     FreeCADGui = None
     GUI = False
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 LIB_NAME = "Timelapse_Features"
 DOCK_NAME = "Timelapse_Features_Dock"
 PANEL_NAME = "Timelapse_Features_Panel"
@@ -955,6 +955,275 @@ def _write_manifest(result, tl):
 
 
 # --------------------------------------------------------------------------
+# ready-to-paste request for an LLM: file + feature + modification
+# --------------------------------------------------------------------------
+DRESSUP_TYPES = ("PartDesign::Chamfer", "PartDesign::Fillet", "PartDesign::Draft",
+                 "PartDesign::Thickness", "PartDesign::Offset")
+PATTERN_TYPES = ("PartDesign::PolarPattern", "PartDesign::LinearPattern",
+                 "PartDesign::Mirrored", "PartDesign::MultiTransform",
+                 "PartDesign::Scaled")
+BOOLEAN_TYPES = ("PartDesign::Boolean", "Part::Cut", "Part::Fuse", "Part::Common",
+                 "Part::MultiFuse", "Part::MultiCommon", "Part::MultiCommon")
+PARAM_HINTS = ("Length", "Width", "Height", "Radius", "Radius1", "Radius2",
+               "Diameter", "Angle", "Angle1", "Angle2", "Type", "Midplane",
+               "Reversed", "Occurrences", "Thickness", "Size", "TaperAngle",
+               "Growth", "Offset", "SideType", "ThroughAll", "MapMode")
+
+
+def _obj_links(value):
+    """'Name (TypeId)' for a link property: object, (object, [subs]) or a list."""
+    out = []
+
+    def add(item):
+        if item is None or isinstance(item, (bool, int, float, str)):
+            return
+        if isinstance(item, (list, tuple)):
+            if (len(item) == 2 and hasattr(item[0], "Name")
+                    and isinstance(item[1], (list, tuple))):
+                text = item[0].Name
+                subs = [str(s) for s in item[1] if str(s).strip()]
+                if subs:
+                    text += " [" + ", ".join(subs) + "]"
+                if hasattr(item[0], "TypeId"):
+                    text += " (" + item[0].TypeId + ")"
+                out.append(text)
+            else:
+                for sub in item:
+                    add(sub)
+            return
+        if hasattr(item, "Name"):
+            text = item.Name
+            if hasattr(item, "TypeId"):
+                text += " (" + item.TypeId + ")"
+            out.append(text)
+
+    add(value)
+    return out
+
+
+def _num(value):
+    if isinstance(value, float):
+        text = "%.4f" % value
+        return text.rstrip("0").rstrip(".")
+    return str(value)
+
+
+def feature_params(obj):
+    """'name=value' list of the properties a human would recognise on any feature."""
+    out = []
+    for name in PARAM_HINTS:
+        try:
+            value = getattr(obj, name, None)
+        except Exception:
+            continue
+        if value is None:
+            continue
+        try:
+            if isinstance(value, (bool, int, float)):
+                out.append("%s=%s" % (name, _num(value)))
+            elif isinstance(value, str) and value:
+                out.append("%s=%s" % (name, value))
+            elif hasattr(value, "UserString"):       # App::PropertyLength, ...
+                out.append("%s=%s" % (name, value.UserString))
+            elif hasattr(value, "Name"):
+                out.append("%s=%s" % (name, value.Name))
+        except Exception:
+            continue
+    return out
+
+
+def feature_facts(obj):
+    """Type-independent description of one feature: what it is built from.
+
+    The source is resolved through the properties that each FreeCAD feature
+    family uses, so a Pad/Pocket points at its sketch, a pattern at the features
+    it duplicates, a dress-up (chamfer, fillet, thickness) at its base feature,
+    a boolean or a Part::Cut at its inputs, and anything unknown at its OutList.
+    """
+    facts = {"name": obj.Name, "label": obj.Label, "type": obj.TypeId,
+             "kind": "", "links": [], "also": [], "params": []}
+    for attr in ("Profile", "Sketch"):
+        got = _obj_links(getattr(obj, attr, None))
+        if got:
+            facts["kind"] = "the sketch that gives its shape"
+            facts["links"] = got
+            break
+    if not facts["links"] and getattr(obj, "Originals", None) is not None:
+        got = _obj_links(getattr(obj, "Originals", None))
+        if got:
+            facts["kind"] = "the feature(s) it duplicates"
+            facts["links"] = got
+    if not facts["links"] and obj.TypeId in DRESSUP_TYPES:
+        got = _obj_links(getattr(obj, "Base", None))
+        if got:
+            facts["kind"] = "the base feature it is applied on"
+            facts["links"] = got
+    if not facts["links"]:
+        got = _obj_links(getattr(obj, "Base", None))
+        if got:
+            facts["kind"] = "the base feature it is built on"
+            facts["links"] = got
+    if not facts["links"]:
+        got = _obj_links(getattr(obj, "Group", None))
+        if got:
+            facts["kind"] = "the features it combines"
+            facts["links"] = got
+    if not facts["links"]:
+        got = []
+        for item in (getattr(obj, "OutList", None) or []):
+            got.extend(_obj_links(item))
+        if got:
+            facts["kind"] = "the object(s) it consumes"
+            facts["links"] = got
+    for attr in ("Tool", "BaseFeature"):
+        facts["also"].extend("%s=%s" % (attr, x) for x in _obj_links(getattr(obj, attr, None)))
+    facts["params"] = feature_params(obj)
+    return facts
+
+
+def unique_mod_path(doc):
+    """'<folder>/<stem>_modified.FCStd', suffixed if that name is already taken."""
+    src = os.path.normpath(doc.FileName or "")
+    if not src:
+        raise RuntimeError("this document has never been saved: use File > Save as first")
+    folder, base = os.path.split(src)
+    stem, ext = os.path.splitext(base)
+    if not ext:
+        ext = ".FCStd"
+    candidate = os.path.join(folder, stem + "_modified" + ext)
+    n = 2
+    while os.path.exists(candidate):
+        candidate = os.path.join(folder, "%s_modified-%d%s" % (stem, n, ext))
+        n += 1
+    return candidate
+
+
+def build_llm_prompt(doc, tl, step, request, new_path=None):
+    """Ready-to-paste request: the file, the selected feature and the change."""
+    src = os.path.normpath(doc.FileName or "")
+    if not src:
+        raise RuntimeError("this document has never been saved: use File > Save as first")
+    folder, base = os.path.split(src)
+    if new_path is None:
+        new_path = unique_mod_path(doc)
+    new_folder, new_base = os.path.split(new_path)
+    request = (request or "").strip()
+    steps = (tl or {}).get("steps") or []
+    total = len(steps) or 1
+    obj = step.get("_obj")
+    if obj is None and step.get("name"):
+        obj = doc.getObject(step["name"])
+    facts = feature_facts(obj) if obj is not None else {"kind": "", "links": [],
+                                                        "also": [], "params": []}
+    body_name = step.get("body") or ""
+    tip = ""
+    vol_step = ""
+    vol_final = ""
+    last_of_body = None
+    for candidate in steps:
+        if body_name and candidate.get("body") == body_name:
+            last_of_body = candidate
+    if last_of_body is None and steps:
+        last_of_body = steps[-1]
+    try:      # the feature that ends the body, as the file itself is saved
+        tip_obj = None
+        if last_of_body is not None:
+            tip_obj = last_of_body.get("_obj") or doc.getObject(last_of_body["name"])
+        if tip_obj is not None:
+            tip = tip_obj.Name
+            if tip_obj.Shape and tip_obj.Shape.Volume:
+                vol_final = "%.3f mm3" % tip_obj.Shape.Volume
+    except Exception:
+        pass
+    try:
+        if obj is not None and obj.Shape and obj.Shape.Volume:
+            vol_step = "%.3f mm3" % obj.Shape.Volume
+    except Exception:
+        vol_step = ""
+    version = ".".join(str(v) for v in FreeCAD.Version()[0:3])
+
+    lines = []
+
+    def add(block, label, value):
+        block.append("   %-14s: %s" % (label, value))
+
+    lines.append("FreeCAD modification request - change ONE feature of a part, on a copy.")
+    lines.append("")
+    lines.append("Before touching anything, load the `freecad` skill (and `freecad-mcp` if "
+                 "you drive the GUI) and follow it:")
+    lines.append("it lists the verified traps of this machine (saving from the GUI, "
+                 "getObject() taking the internal Name")
+    lines.append("and not the Label, proving a change with a screenshot).")
+    lines.append("")
+    lines.append("1. SOURCE FILE - READ ONLY, IT MUST NOT BE MODIFIED")
+    add(lines, "folder", folder)
+    add(lines, "file name", base)
+    add(lines, "full path", src)
+    lines.append("   Keep it byte-identical: compare its SHA256 before and after your work.")
+    lines.append("")
+    lines.append("2. THE MODIFIED PART IS SAVED UNDER A NEW NAME")
+    add(lines, "folder", new_folder)
+    add(lines, "file name", new_base)
+    add(lines, "full path", new_path)
+    lines.append("   Never overwrite the source file; do not move or rename it.")
+    lines.append("")
+    lines.append("3. FEATURE TO MODIFY")
+    add(lines, "document", "%s, FreeCAD %s, %d %s, %d building steps"
+        % (doc.Name if (doc.Label or doc.Name) == doc.Name
+           else "%s (%s)" % (doc.Label, doc.Name), version,
+           len((tl or {}).get("bodies") or {}),
+           "body" if len((tl or {}).get("bodies") or {}) == 1 else "bodies", total))
+    add(lines, "building step", "%d of %d in the computation order of the document"
+        % (step.get("index", 1), total))
+    add(lines, "label", step.get("label", ""))
+    add(lines, "internal name", "%s        <- the name getObject() takes" % step.get("name", ""))
+    add(lines, "type", step.get("type", ""))
+    if body_name:
+        add(lines, "body", "%s (PartDesign::Body)%s"
+            % (body_name, ", tip = " + tip if tip else ""))
+    if facts.get("links"):
+        add(lines, "source", "%s: %s" % (facts["kind"], ", ".join(facts["links"])))
+    if facts.get("also"):
+        add(lines, "also linked", ", ".join(facts["also"]))
+    if facts.get("params"):
+        add(lines, "parameters", ", ".join(facts["params"]))
+    if step.get("detail"):
+        add(lines, "tree detail", step["detail"])
+    if vol_step or vol_final:
+        add(lines, "solid volume", "at this step %s, final tip %s"
+            % (vol_step or "?", vol_final or "?"))
+    lines.append("")
+    lines.append("4. COMPUTATION ORDER OF THE DOCUMENT (first feature to last; >> marks "
+                 "the feature above)")
+    for s in steps:
+        lines.append("   %s%2d  %-16s %-26s %s"
+                     % (">>" if s["index"] == step.get("index") else "  ",
+                        s["index"], s["label"], s["type"], s["profile"] or ""))
+    lines.append("")
+    lines.append("5. MODIFICATION REQUESTED BY THE USER (verbatim)")
+    for text in (request or "(no modification text was given)").splitlines():
+        lines.append("   " + text)
+    lines.append("")
+    lines.append("6. WHAT THE RESULT MUST BE")
+    lines.append("   - understand before editing: identify which object really carries the "
+                 "quantity to change")
+    lines.append("     (a sketch dimension/constraint, a feature parameter, a pattern or "
+                 "dress-up value ...)")
+    lines.append("     and say what you found and why the request maps onto it;")
+    lines.append("   - the change is applied to the NEW file only, the source stays untouched;")
+    lines.append("   - the new file recomputes cleanly: no error in the tree, the tip shape "
+                 "is still valid")
+    lines.append("     and holds the expected solid(s), and nothing else in the model changed;")
+    lines.append("   - report what changed with before -> after values, the new volume and "
+                 "the path of the file")
+    lines.append("     you produced, and show the result with a screenshot of the 3D view;")
+    lines.append("   - if the request is ambiguous or would break the model, ask before "
+                 "guessing.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
 # panel
 # --------------------------------------------------------------------------
 if GUI:
@@ -1051,6 +1320,8 @@ if GUI:
             self.snapshot = None
             self.busy = False
             self.last_result = None
+            self.last_prompt = ""
+            self.last_prompt_path = ""
             self._build_ui()
             self.refresh(initial=True)
 
@@ -1111,6 +1382,24 @@ if GUI:
             row3.addWidget(self.open_btn, 2)
             outer.addLayout(row3)
 
+            self.note_label = QtWidgets.QLabel(
+                "modification to apply to the selected feature:")
+            outer.addWidget(self.note_label)
+            self.note = QtWidgets.QPlainTextEdit()
+            self.note.setObjectName("Timelapse_Note")
+            self.note.setPlaceholderText("e.g. set holes diameter to 5mm")
+            self.note.setFixedHeight(58)
+            self.note.setTabChangesFocus(True)
+            self.note.setToolTip("Describe the change to apply to the step highlighted "
+                                 "in the list above")
+            outer.addWidget(self.note)
+            self.prompt_btn = QtWidgets.QPushButton(
+                "copy to clipboard description for LLM")
+            self.prompt_btn.setToolTip(
+                "Copy a ready-to-paste request describing the file, the selected "
+                "feature and the modification above")
+            outer.addWidget(self.prompt_btn)
+
             self.status = QtWidgets.QLabel("")
             self.status.setWordWrap(True)
             outer.addWidget(self.status)
@@ -1124,6 +1413,7 @@ if GUI:
             self.restore_btn.clicked.connect(self.restore_original)
             self.gif_btn.clicked.connect(self.create_gif)
             self.open_btn.clicked.connect(self.open_gif)
+            self.prompt_btn.clicked.connect(self.copy_llm_prompt)
             self.list.currentItemChanged.connect(self._on_item)
 
         # -- model state ----------------------------------------------
@@ -1256,6 +1546,52 @@ if GUI:
                     summary = self.status.text()
                     self.set_level(self.level)
                     self.status.setText(summary)
+
+        def selected_step(self):
+            """The step highlighted in the list, else the one the level shows."""
+            item = self.list.currentItem()
+            if item is not None:
+                index = self.list.indexOfTopLevelItem(item) + 1
+            elif self.level > 0:
+                index = self.level
+            else:
+                return None
+            for step in (self.tl or {}).get("steps", []):
+                if step["index"] == index:
+                    return step
+            return None
+
+        def copy_llm_prompt(self):
+            """Build the request for an LLM and put it in the clipboard."""
+            request = self.note.toPlainText().strip()
+            if not request:
+                self.status.setText("type the modification to apply first "
+                                    "(the box above the button)")
+                return
+            step = self.selected_step()
+            if step is None:
+                self.status.setText("select the feature to modify in the list first")
+                return
+            try:
+                new_path = unique_mod_path(self.doc)
+                prompt = build_llm_prompt(self.doc, self.tl, step, request, new_path)
+            except Exception as exc:
+                self.status.setText("cannot build the request: %s" % exc)
+                warn("cannot build the request: %s" % exc)
+                traceback.print_exc(file=sys.stdout)
+                return
+            self.last_prompt = prompt
+            self.last_prompt_path = new_path
+            clipboard = QtWidgets.QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(prompt)
+            self.status.setText(
+                "request copied to the clipboard: step %d/%d %s (%s)\n"
+                "paste it into your LLM; it asks for a copy saved as %s (%d characters)"
+                % (step["index"], self.count(), step["label"], step["type"],
+                   os.path.basename(new_path), len(prompt)))
+            log("LLM request for step %d %s -> %s"
+                % (step["index"], step["label"], new_path))
 
         def open_gif(self):
             """Show the folder that holds the GIF and play the GIF itself."""

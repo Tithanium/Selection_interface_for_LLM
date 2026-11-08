@@ -34,6 +34,56 @@ export that walk as a GIF.
    made from the active document.
 6. `restore original` (or closing the panel) puts back the tips and visibility the
    document had before the macro touched it. The document is **never saved**.
+7. Under the buttons, type the change you want in the small text box (e.g.
+   `set holes diameter to 5mm`), select the step in the list and click
+   **copy to clipboard description for LLM**: a self-contained request is copied,
+   ready to paste into an LLM session (see below).
+
+## Change one feature with an LLM (copy/paste bridge)
+
+The request is feature-aware, so it works for every family of feature the tree can
+hold:
+
+| feature family | what the request says it is built from |
+|---|---|
+| Pad, Pocket, Revolution, Groove | `Profile` -> `Sketch002 (Sketcher::SketchObject)` |
+| PolarPattern, LinearPattern, Mirrored, MultiTransform | `Originals` -> the feature(s) it duplicates |
+| Chamfer, Fillet, Thickness, Draft | `Base` -> the base feature **plus the edges** it acts on |
+| Boolean, `Part::Cut` / `Fuse` / `Common` | the features or the tool it combines |
+| anything else | its `OutList` inputs |
+
+plus its key parameters as real quantities (`Length=5.0 mm`, `Occurrences=4`, ...).
+Every request also carries: the **folder, file name and full path** of the source with
+an explicit *do not modify it, keep its SHA256*; the **name the new part is saved
+under** (`<stem>_modified.FCStd`, or `-2`, `-3` ... if that name is taken); the
+document, body and body tip; the feature **label and internal name** (what
+`getObject()` takes, which is not the label); its solid volume at that step and at the
+end; the whole computation order with `>>` on the selected step; your text verbatim;
+and what the answer must contain (identify the carrier of the dimension, change the
+copy only, recompute cleanly, report before -> after values and a screenshot).
+
+Why the whole order travels with the request: the dimension to change is often not on
+the step itself. In the reference test the selected step was `Pocket`, which profiles
+`Sketch002` - but `Sketch002`'s radius is driven by external geometry from
+`Sketch001` (label `trou`), which is where the Ø26.5 really lives.
+
+### Verified end to end
+
+The clipboard text was pasted into a fresh `pi` session (nothing shared with the
+FreeCAD side) for `guide_percage26` step 3 with `set holes diameter to 5mm`:
+
+- it found `Sketch001/trou` `Diameter 26.5 -> 5.0`, proved the Pocket profile was
+  driven from it (`Equal` + projected edge) and rejected the naive reading;
+- it wrote `guide_percage26_modified.FCStd` and left the source byte-identical
+  (SHA256 `18a1228f...f29b7373` before and after);
+- independent headless probe of both files: same 21 objects, same 21 faces, 1 solid,
+  bbox 80x80x51 mm, `Sketch001` diameter `26.5 -> 5.0`, tip volume
+  `15959.481 -> 9740.565 mm3`, and no other sketch dimension touched.
+
+Two traps met while testing: build the request from the panel state, never from
+`QApplication.clipboard().text()` - reading the Windows clipboard from the FreeCAD
+process hung a 60 s RPC call; and normalise the path with `os.path.normpath`, because
+`doc.FileName` mixes `/` and `\`.
 
 ## How the order is recovered
 
