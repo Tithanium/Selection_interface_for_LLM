@@ -27,6 +27,7 @@ export that walk as a GIF.
    | `datum objects` | the datum planes / lines / points of the steps already built stay on screen. Unticked they stay hidden from one level to the next, and only the datum of the level being looked at is shown, so a datum step still displays what it must |
    | `profile sketch` | the sketch the selected feature is built from, highlighted orange |
    | `other bodies` | the parts built by the other bodies at this level. Unticked, only the body of the selected step is drawn (for a mirror or a boolean, the body it copies) |
+   | `base / fused results` | **unticked by default.** A `PartDesign::FeatureBase` / `Part::MultiFuse` / `Part::Fuse` does not build a new shape, it repeats the shape of the pieces it is made from (measured: the BaseFeature of `02_seringue_cardanV3` step 60, its MultiFuse and the two halves it fuses are the same 99563.843 mm3 solid, common volume 100.00 %, same placement). Unticked, such a step is drawn at its own step only and the objects it consumes stop being drawn on their own, so the same surface is never painted twice. Ticked, it stays on screen from its step on, exactly like the tree of the document — the coincident surfaces then shimmer like a mesh |
 
    Below them, the recovered computation order is listed: `#`, feature label,
    `type <- what it consumes`. Datum planes, lines, points and coordinate systems
@@ -55,6 +56,32 @@ export that walk as a GIF.
    `set holes diameter to 5mm`), select the step in the list and click
    **copy to clipboard description for LLM**: a self-contained request is copied,
    ready to paste into an LLM session (see below).
+
+## Two objects, one surface (z-fighting)
+
+On `02_seringue_cardanV3`, step 59 fuses the two halves of the encastrement and step
+60 inserts that fusion into the `Encastrement` body. Three objects therefore carry
+the very same surfaces:
+
+| object | type | volume |
+|---|---|---|
+| `E15_Trou_ecrou_carres2` + `Encastrement_moitie_miroir` | body feature + mirror | 49781.921 + 49781.921 mm3 |
+| `Encastrement_brut` | `Part::MultiFuse` | 99563.843 mm3 |
+| `BaseFeature` | `PartDesign::FeatureBase` | 99563.843 mm3 (`common volume` with the fusion: **100.00 %**, same placement) |
+
+Drawn together they z-fight (the grey block shows internal seams and hatched
+patches, like a mesh) and the opaque copy in front cancels the see-through of the
+selected object. That is a display problem, not an ordering one, and it is what the
+`base / fused results` box is for: unticked (default) the fusion takes the place of
+the pieces it is made from — at step 59 the two halves go away, at 60 the fusion goes
+away, from 61 on the body's own features carry the shape. One copy of each surface at
+every frame, measured on the same frame: `60_dup_on` (coincident copies) mean
+brightness 201.06 vs `60_dup_off` 209.81, 161807 pixels different.
+
+The see-through now also applies to such a step (it used to be armed only when the
+step had a profile sketch, so a `FeatureBase` stayed opaque): at step 60 the
+encastrement becomes translucent (mean 209.81 -> 213.91, 143002 pixels change) and
+its internal cavities and the parts inside it show.
 
 ## What "displaying a step" means exactly
 

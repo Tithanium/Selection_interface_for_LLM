@@ -49,7 +49,7 @@ except Exception:  # pragma: no cover - headless
     FreeCADGui = None
     GUI = False
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 LIB_NAME = "Timelapse_Features"
 DOCK_NAME = "Timelapse_Features_Dock"
 PANEL_NAME = "Timelapse_Features_Panel"
@@ -72,6 +72,14 @@ SKIP_PREFIXES = ("Sketcher::", "TechDraw::", "Spreadsheet::", "Fem::", "Mesh::")
 # datums are not shaped like a part but the user must be able to see them
 DATUM_TYPES = ("PartDesign::Plane", "PartDesign::Line", "PartDesign::Point",
                "PartDesign::CoordinateSystem")
+
+# A base feature / a fusion does not build a new shape: it repeats the shape of
+# the objects it is made from (measured on 02_seringue_cardanV3 step 60: the
+# FeatureBase, the MultiFuse and the two halves are the same 99563.843 mm3 solid,
+# common volume 100.00 %, same placement). Drawing them together puts exactly
+# coincident surfaces on screen, which z-fights and looks like a mesh, and the
+# see-through of the selected object is masked by the opaque copy in front.
+DUP_TYPES = ("PartDesign::FeatureBase", "Part::MultiFuse", "Part::Fuse")
 
 # display choices of the panel: label -> (DisplayMode, Transparency)
 # (a Body's ViewObject offers exactly Flat Lines / Shaded / Wireframe / Points)
@@ -213,6 +221,34 @@ def is_build_object(obj):
 # --------------------------------------------------------------------------
 # the timeline: exact computation order
 # --------------------------------------------------------------------------
+def absorbed_sources(doc, obj, depth=4):
+    """Every object whose shape `obj` repeats, its inputs included.
+
+    A fusion or a base feature is made of objects that are already on screen; the
+    whole point of listing it as one more step is that it *takes their place*,
+    otherwise the same surfaces are drawn twice and z-fight. Bodies and
+    containers are expanded so a fusion of two bodies absorbs both halves.
+    """
+    out, seen, todo = [], set(), [(obj, 0)]
+    while todo:
+        current, level = todo.pop()
+        if level >= depth:
+            continue
+        for dep in list(getattr(current, "OutList", []) or []):
+            if dep is None or dep.Name in seen or dep.Name == obj.Name:
+                continue
+            seen.add(dep.Name)
+            out.append(dep.Name)
+            if dep.TypeId == "PartDesign::Body" or dep.TypeId in CONTAINER_TYPES:
+                for member in list(getattr(dep, "Group", []) or []):
+                    if member.Name not in seen and member.Name != obj.Name:
+                        seen.add(member.Name)
+                        out.append(member.Name)
+            else:
+                todo.append((dep, level + 1))
+    return sorted(out)
+
+
 def timeline(doc):
     """Return {'steps': [...], 'warnings': [...], 'bodies': {...}}.
 
@@ -309,6 +345,8 @@ def timeline(doc):
             "short": short_type(obj.TypeId),
             "body": owner,
             "datum": is_datum(obj),
+            "dup": obj.TypeId in DUP_TYPES,
+            "absorbs": absorbed_sources(doc, obj) if obj.TypeId in DUP_TYPES else [],
             "sketch": sketch.Name if sketch is not None else None,
             "profile": profile,
             "detail": _detail_string(obj),
@@ -590,7 +628,7 @@ def focus_body(doc, step):
 
 
 def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
-                see_through=True, show_datum=True, show_others=True):
+                see_through=True, show_datum=True, show_others=True, show_dup=False):
     """Show the part as it was after `level` building steps (0 = nothing yet).
 
     Only view properties change: the model is never touched. Every body is put in
@@ -616,6 +654,16 @@ def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
             break
     current_body = focus_body(doc, current) if current is not None else None
 
+    # A fusion / base feature repeats the shape of the objects it is made of, so
+    # once it is reached those objects stop being drawn on their own: the result
+    # takes their place instead of being painted on top of them.
+    absorbed = {}
+    if not show_dup:
+        for step in steps:
+            if step["index"] <= level and step.get("dup"):
+                for name in step.get("absorbs") or []:
+                    absorbed.setdefault(name, step["index"])
+
     for body in body_objects(doc):
         vo = getattr(body, "ViewObject", None)
         if vo is None:
@@ -627,9 +675,13 @@ def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
                 pass
         try:
             # children only render under a visible body; with 'other bodies'
-            # unchecked the bodies that are not being looked at are closed
-            vo.Visibility = bool(show_others or current_body is None
-                                 or body.Name == current_body)
+            # unchecked the bodies that are not being looked at are closed, and
+            # a body whose shape was absorbed by a fusion is closed as well
+            wanted = bool(show_others or current_body is None
+                          or body.Name == current_body)
+            if body.Name in absorbed and body.Name != current_body:
+                wanted = False
+            vo.Visibility = wanted
         except Exception:
             pass
 
@@ -650,12 +702,18 @@ def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
         vo = getattr(step["_obj"], "ViewObject", None)
         if vo is None:
             continue
-        if step["datum"]:
-            # the box decides whether datums accumulate from step to step; the
-            # datum of the level being looked at is shown whatever the box says,
-            # so every entity of the list stays visible when it is selected
-            wanted = (step["index"] <= level if show_datum
-                      else current is not None and step["index"] == level)
+        is_current = step is current
+        if is_current:
+            # the step being looked at is always drawn, whatever the boxes say
+            wanted = True
+        elif step["name"] in absorbed:
+            wanted = False
+        elif step["datum"]:
+            wanted = step["index"] <= level if show_datum else False
+        elif step.get("dup"):
+            # a base feature / fusion shows the shape of other steps: it is
+            # drawn at its own step, then it is not needed any more
+            wanted = step["index"] <= level if show_dup else False
         elif step["body"]:
             wanted = last_built.get(step["body"]) == step["name"]
             if wanted and not show_others and current_body:
@@ -663,7 +721,7 @@ def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
         else:
             wanted = step["index"] <= level
             if wanted and not show_others and current is not None:
-                wanted = step is current
+                wanted = False
         try:
             vo.Visibility = wanted
             shown += 1 if wanted else 0
@@ -688,9 +746,11 @@ def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
             _sketch_highlight(svo)
 
     if mode:
-        # a profile inside the material is only visible through a see-through body
+        # a profile inside the material is only visible through a see-through body,
+        # and so is what a base feature / fusion swallows or sits in front of
         apply_display_mode(doc, mode)
-        if focus is not None and see_through:
+        if see_through and current is not None and (focus is not None
+                                                    or current.get("dup")):
             see_through_body(doc, current)
     if recompute:
         doc.recompute()
@@ -1142,7 +1202,8 @@ def camera_report(view, snap):
 
 def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
                     hide_panel=None, background="White", mode=None,
-                    show_datum=True, show_sketch=True, show_others=True):
+                    show_datum=True, show_sketch=True, show_others=True,
+                    show_dup=False):
     """Frame the final part, sweep every step, capture, assemble the GIF."""
     if not GUI:
         raise RuntimeError("GIF generation needs the FreeCAD GUI (saveImage)")
@@ -1159,9 +1220,9 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
     result = {"doc": doc.Name, "steps": len(steps), "frames": [], "warnings": [],
               "display": mode or DISPLAY_MODES[0][0],
               "shows": {"datum": bool(show_datum), "sketch": bool(show_sketch),
-                        "others": bool(show_others)}}
+                        "others": bool(show_others), "dup": bool(show_dup)}}
     opts = {"show_datum": show_datum, "show_sketch": show_sketch,
-            "show_others": show_others}
+            "show_others": show_others, "show_dup": show_dup}
     try:
         front_document(doc)
         if hide_panel is not None:
@@ -1206,6 +1267,7 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
                 "index": step["index"], "level": level, "label": step["label"],
                 "name": step["name"], "type": step["type"], "profile": step["profile"],
                 "detail": step["detail"], "datum": bool(step.get("datum")),
+                "dup": bool(step.get("dup")),
                 "sketch": step.get("sketch"),
                 "file": os.path.basename(path),
                 "path": path, "pixels": stats, "progress": round(progress, 4),
@@ -1692,12 +1754,13 @@ if GUI:
             top.addWidget(self.mode_box, 1)
             outer.addLayout(top)
 
-            # what else is drawn, all ticked by default
+            # what else is drawn, all ticked by default except the duplicates
             self.show_box = QtWidgets.QGroupBox("show also")
             self.show_box.setObjectName("Timelapse_ShowBox")
-            show_row = QtWidgets.QHBoxLayout(self.show_box)
-            show_row.setContentsMargins(6, 2, 6, 2)
-            show_row.setSpacing(8)
+            show_grid = QtWidgets.QGridLayout(self.show_box)
+            show_grid.setContentsMargins(6, 2, 6, 2)
+            show_grid.setHorizontalSpacing(10)
+            show_grid.setVerticalSpacing(1)
             self.cb_datum = QtWidgets.QCheckBox("datum objects")
             self.cb_datum.setObjectName("Timelapse_ShowDatum")
             self.cb_datum.setToolTip(
@@ -1713,10 +1776,21 @@ if GUI:
             self.cb_others.setToolTip(
                 "Show the parts built by the other bodies at this level. \n"
                 "Unticked, only the body of the selected step is drawn")
-            for box in (self.cb_datum, self.cb_sketch, self.cb_others):
-                box.setChecked(True)
-                show_row.addWidget(box)
-            show_row.addStretch(1)
+            self.cb_dup = QtWidgets.QCheckBox("base / fused results")
+            self.cb_dup.setObjectName("Timelapse_ShowDup")
+            self.cb_dup.setChecked(False)
+            self.cb_dup.setToolTip(
+                "A base feature or a fusion (BaseFeature, MultiFuse) does not build\n"
+                "a new shape: it repeats the shape of the objects it is made from.\n"
+                "Unticked, it is drawn at its own step only, and the objects it\n"
+                "absorbs stop being drawn on their own (no coincident surfaces).\n"
+                "Ticked, it stays on screen from its step on, exactly like the tree\n"
+                "of the document -- the surfaces then overlap and shimmer")
+            for index, box in enumerate((self.cb_datum, self.cb_sketch,
+                                         self.cb_others, self.cb_dup)):
+                if box is not self.cb_dup:
+                    box.setChecked(True)
+                show_grid.addWidget(box, index // 2, index % 2)
             outer.addWidget(self.show_box)
 
             self.list = QtWidgets.QTreeWidget()
@@ -1799,7 +1873,8 @@ if GUI:
             self.open_btn.clicked.connect(self.open_gif)
             self.prompt_btn.clicked.connect(self.copy_llm_prompt)
             self.mode_box.currentTextChanged.connect(self.set_display_mode)
-            for box in (self.cb_datum, self.cb_sketch, self.cb_others):
+            for box in (self.cb_datum, self.cb_sketch, self.cb_others,
+                        self.cb_dup):
                 box.toggled.connect(self.set_show_options)
             self.list.currentItemChanged.connect(self._on_item)
 
@@ -1844,10 +1919,11 @@ if GUI:
             self.set_level(max(0, min(self.level, len(steps))), from_refresh=True)
 
         def shows(self):
-            """The three 'show also' boxes, as keyword arguments for apply_level."""
+            """The 'show also' boxes, as keyword arguments for apply_level."""
             return {"show_datum": bool(self.cb_datum.isChecked()),
                     "show_sketch": bool(self.cb_sketch.isChecked()),
-                    "show_others": bool(self.cb_others.isChecked())}
+                    "show_others": bool(self.cb_others.isChecked()),
+                    "show_dup": bool(self.cb_dup.isChecked())}
 
         def set_level(self, level, from_refresh=False):
             if self.busy or not self.tl:
@@ -1891,6 +1967,11 @@ if GUI:
                     hidden.append("sketch")
                 if not self.cb_others.isChecked():
                     hidden.append("other bodies")
+                if not self.cb_dup.isChecked() and not step.get("dup"):
+                    hidden.append("base/fused results after their step")
+                if step.get("dup") and step.get("absorbs"):
+                    info += ("   |   takes the place of %d absorbed object(s)"
+                             % len(step["absorbs"]))
                 if hidden:
                     info += "   |   not shown: " + ", ".join(hidden)
             if self.tl["warnings"]:
