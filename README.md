@@ -38,7 +38,10 @@ of your FreeCAD user data, so that `package.xml` ends up at
 workbench **Selection interface** appears in the workbench selector, with the
 toolbar commands *Building steps panel* and *GIF of the whole build*. On Windows
 `<user>` is `%APPDATA%\FreeCAD\v1-1`; `FreeCAD.getUserAppDataDir()` gives the
-right folder on every system.
+right folder on every system. After the restart, the Report view lists the addon in
+its *Mod summary* table with mode Ext (that is FreeCAD confirming it imported
+reecad.SelectionInterfaceForLLM.init_gui); if the workbench does not appear, that
+table says why.
 
 **As a macro (development).** `dev/Selection_interface_for_LLM.FCMacro` can be put
 in the macro folder and run from `Macro > Macros...`; it finds the package, loads
