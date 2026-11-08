@@ -49,7 +49,7 @@ except Exception:  # pragma: no cover - headless
     FreeCADGui = None
     GUI = False
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 LIB_NAME = "Timelapse_Features"
 DOCK_NAME = "Timelapse_Features_Dock"
 PANEL_NAME = "Timelapse_Features_Panel"
@@ -85,6 +85,10 @@ DISPLAY_MODES = (
 SKETCH_LINE_WIDTH = 3.0
 SKETCH_LINE_COLOR = (1.0, 0.45, 0.0)      # the profile of the selected feature
 PROFILE_TRANSPARENCY = 70                  # see the profile through the material
+
+# containers are not steps: a step that links one of them consumes everything
+# built inside it (see the dependency expansion in timeline())
+CONTAINER_TYPES = ("App::Part", "App::DocumentObjectGroup")
 
 
 # --------------------------------------------------------------------------
@@ -225,6 +229,41 @@ def timeline(doc):
     for o in build:
         deps[o.Name] = [d for d in o.OutList if d.Name in names and d.Name != o.Name]
 
+    def builds_inside(container):
+        """Every build object belonging to a body, a container or a nested one."""
+        found = []
+        for member in list(getattr(container, "Group", []) or []):
+            if member.Name in names:
+                found.append(member)
+            elif member.TypeId in CONTAINER_TYPES:
+                found.extend(builds_inside(member))
+        return found
+
+    # A Part::Mirroring / Part::MultiFuse / boolean that consumes a whole BODY
+    # depends on that body's *complete construction*, not on the body object --
+    # and the body is not a step, so the link said nothing to the sort. The step
+    # then landed right after the body's first feature and the finished copy
+    # appeared from nowhere while its source was still a single pad (measured on
+    # 02_seringue_cardanV3: "01_Corps_seringue copie symetrique" was step 4 with
+    # 14 of the 15 features of the source body still to come at steps 25..66).
+    # Expanding the link to the body's built features fixes the order.
+    expanded = {}
+    for o in build:
+        for dep in list(o.OutList):
+            if dep is None:
+                continue
+            if dep.TypeId == "PartDesign::Body":
+                members = builds_inside(dep)
+            elif dep.TypeId in CONTAINER_TYPES:
+                members = builds_inside(dep)
+            else:
+                continue
+            extra = [m for m in members
+                     if m.Name != o.Name and m not in deps[o.Name]]
+            if extra:
+                deps[o.Name].extend(extra)
+                expanded[o.Name] = expanded.get(o.Name, 0) + len(extra)
+
     # Kahn's algorithm; ties broken by document (creation) order
     ordered, done, remaining = [], set(), list(build)
     while remaining:
@@ -277,7 +316,13 @@ def timeline(doc):
         })
     if not steps:
         warnings.append("no build object found (no PartDesign feature outside a sketch)")
-    return {"doc": doc.Name, "steps": steps, "warnings": warnings, "bodies": bodies}
+    notes = []
+    if expanded:
+        notes.append("whole-body links expanded to their construction: "
+                     + ", ".join("%s <- %d feature(s)" % kv
+                                 for kv in sorted(expanded.items())))
+    return {"doc": doc.Name, "steps": steps, "warnings": warnings,
+            "notes": notes, "bodies": bodies}
 
 
 def _step_source(obj):
@@ -413,15 +458,22 @@ def restore_state(doc, snap):
 
 def current_volumes(doc, tl=None, level=None):
     """Volume of the shape on screen for every body: proof that a step did
-    something even when the change is hidden from the current viewing angle."""
+    something even when the change is hidden from the current viewing angle.
+
+    Steps that live outside a body (a Part::Mirroring, a MultiFuse ...) are
+    counted on their own, otherwise a mirror that lands right on top of a
+    symmetric part would look like a step that did nothing.
+    """
     out = {}
     if tl is not None and level is not None:
         for step in (tl.get("steps") or []):
-            if step["index"] > level or not step["body"] or step.get("datum"):
+            if step["index"] > level or step.get("datum"):
                 continue
             volume = solid_volume(step["_obj"])
-            if volume is not None:
-                out[step["body"]] = round(volume, 6)
+            if volume is None:
+                continue
+            key = step["body"] or ("outside:" + step["name"])
+            out[key] = round(volume, 6)
         return out
     for body in body_objects(doc):
         tip = _deref(getattr(body, "Tip", None))
@@ -512,8 +564,33 @@ def see_through_body(doc, step, value=PROFILE_TRANSPARENCY):
     return touched
 
 
+def focus_body(doc, step):
+    """The body a step belongs to, or the body it consumes when it lives outside.
+
+    A Part::Mirroring / boolean / FeatureBase has no body of its own, but it
+    only exists because of the body it copies: that body is what 'other bodies
+    off' should keep on screen.
+    """
+    if step is None:
+        return None
+    if step.get("body"):
+        return step["body"]
+    obj = step.get("_obj")
+    if obj is None:
+        return None
+    for dep in list(getattr(obj, "OutList", []) or []):
+        if dep is None:
+            continue
+        if dep.TypeId == "PartDesign::Body":
+            return dep.Name
+        for body in body_objects(doc):
+            if dep in list(body.Group):
+                return body.Name
+    return None
+
+
 def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
-                see_through=True):
+                see_through=True, show_datum=True, show_others=True):
     """Show the part as it was after `level` building steps (0 = nothing yet).
 
     Only view properties change: the model is never touched. Every body is put in
@@ -537,6 +614,7 @@ def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
         if step["index"] == level:
             current = step
             break
+    current_body = focus_body(doc, current) if current is not None else None
 
     for body in body_objects(doc):
         vo = getattr(body, "ViewObject", None)
@@ -548,7 +626,10 @@ def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
             except Exception:
                 pass
         try:
-            vo.Visibility = True       # children only render under a visible body
+            # children only render under a visible body; with 'other bodies'
+            # unchecked the bodies that are not being looked at are closed
+            vo.Visibility = bool(show_others or current_body is None
+                                 or body.Name == current_body)
         except Exception:
             pass
 
@@ -570,11 +651,19 @@ def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
         if vo is None:
             continue
         if step["datum"]:
-            wanted = step["index"] <= level
+            # the box decides whether datums accumulate from step to step; the
+            # datum of the level being looked at is shown whatever the box says,
+            # so every entity of the list stays visible when it is selected
+            wanted = (step["index"] <= level if show_datum
+                      else current is not None and step["index"] == level)
         elif step["body"]:
             wanted = last_built.get(step["body"]) == step["name"]
+            if wanted and not show_others and current_body:
+                wanted = step["body"] == current_body
         else:
             wanted = step["index"] <= level
+            if wanted and not show_others and current is not None:
+                wanted = step is current
         try:
             vo.Visibility = wanted
             shown += 1 if wanted else 0
@@ -753,11 +842,11 @@ def animation_duration(value=None):
     return old
 
 
-def frame_on_final_part(doc, tl, view, outer_attempts=6, mode=None):
+def frame_on_final_part(doc, tl, view, outer_attempts=6, mode=None, **opts):
     """Fit the view on the COMPLETE part, then re-apply the user's angle."""
     settle_view(view)
     saved = camera_snapshot(view)
-    apply_level(doc, tl, len(tl["steps"]), mode=mode, see_through=False)
+    apply_level(doc, tl, len(tl["steps"]), mode=mode, see_through=False, **opts)
     pump()
     view.fitAll()
     pump(3)
@@ -1052,7 +1141,8 @@ def camera_report(view, snap):
 
 
 def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
-                    hide_panel=None, background="White", mode=None):
+                    hide_panel=None, background="White", mode=None,
+                    show_datum=True, show_sketch=True, show_others=True):
     """Frame the final part, sweep every step, capture, assemble the GIF."""
     if not GUI:
         raise RuntimeError("GIF generation needs the FreeCAD GUI (saveImage)")
@@ -1067,7 +1157,11 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
     old_anim = animation_duration(0)
     started = time.time()
     result = {"doc": doc.Name, "steps": len(steps), "frames": [], "warnings": [],
-              "display": mode or DISPLAY_MODES[0][0]}
+              "display": mode or DISPLAY_MODES[0][0],
+              "shows": {"datum": bool(show_datum), "sketch": bool(show_sketch),
+                        "others": bool(show_others)}}
+    opts = {"show_datum": show_datum, "show_sketch": show_sketch,
+            "show_others": show_others}
     try:
         front_document(doc)
         if hide_panel is not None:
@@ -1078,7 +1172,7 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
         result["outdir"] = out
         result["frames_dir"] = frames_dir
 
-        frame_on_final_part(doc, tl, view, outer_attempts=6, mode=mode)
+        frame_on_final_part(doc, tl, view, outer_attempts=6, mode=mode, **opts)
         width, height = image_size(view, max_px=max_px)
         result["frame_size"] = [width, height]
         result["camera"] = camera_report(view, saved_camera)
@@ -1086,7 +1180,8 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
         previous = None
         previous_volumes = {}
         for step in steps:
-            level = apply_level(doc, tl, step["index"], mode=mode, see_through=False)
+            level = apply_level(doc, tl, step["index"], mode=mode, see_through=False,
+                                **opts)
             pump(3)
             name = "frame_%03d_%s.png" % (step["index"], _file_safe(step["label"]))
             path = os.path.join(frames_dir, name)
@@ -1597,6 +1692,33 @@ if GUI:
             top.addWidget(self.mode_box, 1)
             outer.addLayout(top)
 
+            # what else is drawn, all ticked by default
+            self.show_box = QtWidgets.QGroupBox("show also")
+            self.show_box.setObjectName("Timelapse_ShowBox")
+            show_row = QtWidgets.QHBoxLayout(self.show_box)
+            show_row.setContentsMargins(6, 2, 6, 2)
+            show_row.setSpacing(8)
+            self.cb_datum = QtWidgets.QCheckBox("datum objects")
+            self.cb_datum.setObjectName("Timelapse_ShowDatum")
+            self.cb_datum.setToolTip(
+                "Keep the datum planes / lines / points of the steps already \n"
+                "built on screen. Unticked, only the datum of the level you are \n"
+                "looking at stays visible")
+            self.cb_sketch = QtWidgets.QCheckBox("profile sketch")
+            self.cb_sketch.setObjectName("Timelapse_ShowSketch")
+            self.cb_sketch.setToolTip(
+                "Show the sketch the selected feature is built from, highlighted")
+            self.cb_others = QtWidgets.QCheckBox("other bodies")
+            self.cb_others.setObjectName("Timelapse_ShowOthers")
+            self.cb_others.setToolTip(
+                "Show the parts built by the other bodies at this level. \n"
+                "Unticked, only the body of the selected step is drawn")
+            for box in (self.cb_datum, self.cb_sketch, self.cb_others):
+                box.setChecked(True)
+                show_row.addWidget(box)
+            show_row.addStretch(1)
+            outer.addWidget(self.show_box)
+
             self.list = QtWidgets.QTreeWidget()
             self.list.setObjectName("Timelapse_StepList")
             self.list.setColumnCount(3)
@@ -1677,6 +1799,8 @@ if GUI:
             self.open_btn.clicked.connect(self.open_gif)
             self.prompt_btn.clicked.connect(self.copy_llm_prompt)
             self.mode_box.currentTextChanged.connect(self.set_display_mode)
+            for box in (self.cb_datum, self.cb_sketch, self.cb_others):
+                box.toggled.connect(self.set_show_options)
             self.list.currentItemChanged.connect(self._on_item)
 
         # -- model state ----------------------------------------------
@@ -1719,11 +1843,18 @@ if GUI:
                 log("warning: " + warning)
             self.set_level(max(0, min(self.level, len(steps))), from_refresh=True)
 
+        def shows(self):
+            """The three 'show also' boxes, as keyword arguments for apply_level."""
+            return {"show_datum": bool(self.cb_datum.isChecked()),
+                    "show_sketch": bool(self.cb_sketch.isChecked()),
+                    "show_others": bool(self.cb_others.isChecked())}
+
         def set_level(self, level, from_refresh=False):
             if self.busy or not self.tl:
                 return
             level = max(0, min(int(level), self.count()))
-            self.level = apply_level(self.doc, self.tl, level, mode=self.display)
+            self.level = apply_level(self.doc, self.tl, level, mode=self.display,
+                                     **self.shows())
             pump()
             self.spin.blockSignals(True)
             self.spin.setValue(self.level)
@@ -1753,6 +1884,15 @@ if GUI:
                     sketch = self.doc.getObject(step["sketch"])
                     if sketch is not None:
                         info += "   |   profile: " + (sketch.Label or sketch.Name)
+                hidden = []
+                if not self.cb_datum.isChecked():
+                    hidden.append("datums")
+                if not self.cb_sketch.isChecked():
+                    hidden.append("sketch")
+                if not self.cb_others.isChecked():
+                    hidden.append("other bodies")
+                if hidden:
+                    info += "   |   not shown: " + ", ".join(hidden)
             if self.tl["warnings"]:
                 info += "  |  %d warning(s), see report view" % len(self.tl["warnings"])
             self.status.setText(info)
@@ -1765,6 +1905,13 @@ if GUI:
             self.set_level(self.level)          # re-apply with the new mode
             pump()
             self.status.setText("display: %s\n%s" % (self.display, self.status.text()))
+
+        def set_show_options(self, checked=None):
+            """A 'show also' box was ticked/unticked: re-apply the level."""
+            if self.doc is None or not self.tl:
+                return
+            self.set_level(self.level)
+            pump()
 
         def _on_item(self, current, previous=None):
             if self.busy or current is None:
@@ -1792,7 +1939,8 @@ if GUI:
                                     "responsive..." % self.count())
                 QtWidgets.QApplication.processEvents()
                 result = build_timelapse(self.doc, self.tl, mode=self.display,
-                                         hide_panel=self.set_capture_mode)
+                                         hide_panel=self.set_capture_mode,
+                                         **self.shows())
                 self.last_result = result
                 note = ""
                 if result.get("flat_frames"):

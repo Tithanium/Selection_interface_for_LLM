@@ -42,6 +42,8 @@ def main():
                  step["type"], step["profile"] or "", step["detail"]))
     for warning in timeline["warnings"]:
         print("WARNING: %s" % warning)
+    for note in timeline.get("notes") or []:
+        print("note: %s" % note)
     if options.get("json"):
         payload = {
             "document": doc.Name,

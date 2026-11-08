@@ -19,9 +19,18 @@ export that walk as a GIF.
 1. Open the part, `Macro > Macros... > Timelapse_Features.FCMacro > Execute`.
 2. A dock named **Timelapse - building steps** appears on the right. At the top, the
    **display** list chooses how everything is drawn: `solid + edges`, `solid`,
-   `edges only`, `transparent`, `points`. Below it, the recovered computation order
-   is listed: `#`, feature label, `type <- what it consumes`. Datum planes, lines,
-   points and coordinate systems are steps like any other feature.
+   `edges only`, `transparent`, `points`. Just below, the **show also** boxes choose
+   *what* is drawn (all ticked by default):
+
+   | box | what it adds |
+   |---|---|
+   | `datum objects` | the datum planes / lines / points of the steps already built stay on screen. Unticked they stay hidden from one level to the next, and only the datum of the level being looked at is shown, so a datum step still displays what it must |
+   | `profile sketch` | the sketch the selected feature is built from, highlighted orange |
+   | `other bodies` | the parts built by the other bodies at this level. Unticked, only the body of the selected step is drawn (for a mirror or a boolean, the body it copies) |
+
+   Below them, the recovered computation order is listed: `#`, feature label,
+   `type <- what it consumes`. Datum planes, lines, points and coordinate systems
+   are steps like any other feature.
 3. `step >` / `< step`, the spin box, or clicking a row moves the development
    level and the 3D view shows exactly what that level holds: the last built
    feature of every body, the datums reached so far, and the **sketch that gives
@@ -118,6 +127,32 @@ process hung a 60 s RPC call; and normalise the path with `os.path.normpath`, be
 `doc.FileName` mixes `/` and `\`.
 
 ## How the order is recovered
+
+**A piece built by several features never appears from nowhere.** The order comes
+from the model's own links (a Kahn topological sort over `OutList`, tie-break on
+document order), then each body is checked against its `Tip -> BaseFeature` walk.
+The subtle part is a step that consumes a whole **body**: `Part::Mirroring`,
+`Part::MultiFuse`, a boolean, a `PartDesign::FeatureBase`. Those link the *Body
+object*, which is not a step, so the sort learned nothing from the link and put
+the step right after the body's first feature. The finished copy then appeared in
+one go while its source was a single pad — measured on `02_seringue_cardanV3`,
+`01_Corps_seringue copie symetrique` was step **4** while 14 of the 15 features of
+the body it copies were still to come (steps 25..66).
+
+The link is now **expanded to the body's construction** (every built feature
+inside it, recursively for an `App::Part` / group), so the copy can only arrive
+after the piece it duplicates is complete. On the same file the mirror moved to
+step **57** and `timeline()` reports the expansion in its `notes`:
+
+```
+whole-body links expanded to their construction: Cardan_miroir <- 9 feature(s),
+Corps_seringue_miroir <- 17 feature(s), Encastrement_brut <- 22 feature(s), ...
+```
+
+`02_piston_cardanV3`: 4 mirrors + 1 fuse moved, 66 steps before and after, 0
+warnings; `02_seringue_cardanV3`: 4 moved, 68 steps before and after, 0 warnings.
+A mirror is a single atomic feature, so its own copy still appears in one step —
+what changed is that the origin is fully built by then.
 
 1. every object that produces a shape (sketches, datums, origins, bodies and
    containers are excluded) is topologically sorted on its real links
