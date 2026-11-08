@@ -3,25 +3,52 @@
 Watch a finished PartDesign part being built again, one feature at a time, and
 export that walk as a GIF.
 
-Repository: <https://github.com/Tithanium/Selection_interface_for_LLM> — version 2.0.0.
-How to turn this macro into an indexed FreeCAD addon (workbench content,
-`package.xml`, license, gap list, submission route) is studied in
-[ADDON_ROADMAP.md](ADDON_ROADMAP.md).
+Repository: <https://github.com/Tithanium/Selection_interface_for_LLM> — version 2.1.0.
+This repository **is** a FreeCAD addon (`package.xml` at the root);
+[ADDON_ROADMAP.md](ADDON_ROADMAP.md) records what is still missing before it can be
+submitted to the official addon index.
 
 ```
-%APPDATA%\FreeCAD\v1-1\Macro\            ( = FreeCAD.getUserMacroDir(True) )
-├── Selection_interface_for_LLM.FCMacro           <- the file Macro > Macros... runs
-└── Selection_interface_for_LLM\                  <- this folder (library, not listed as a macro)
-    ├── selection_interface_for_llm_lib.py                 logic + panel
-    ├── report_order.py                  headless order check  (freecadcmd)
-    ├── check_timelapse.py               output-folder verifier (plain python)
-    ├── task.md                          what the tool must do, and how it is checked
-    └── README.md
+Selection_interface_for_LLM/                  <- the addon. Copy or clone it into <user>/Mod/
+├── package.xml                               addon manifest (name, version, classname, licenses)
+├── pyproject.toml                            dev tooling only
+├── LICENSE-Code  LICENSE-Assets              LGPL-2.1-or-later / CC-BY-SA-4.0
+├── README.md  CHANGELOG.md  task.md  ADDON_ROADMAP.md
+├── freecad/
+│   └── SelectionInterfaceForLLM/             namespaced Python package (no sys.path tricks)
+│       ├── __init__.py                       headless entry point, no Qt
+│       ├── init_gui.py                       registers icons, commands and the workbench
+│       ├── workbench.py                      "Selection interface" workbench + toolbar
+│       ├── commands.py                       Building steps panel / GIF of the whole build
+│       ├── interface.py                      ordering engine, panel, GIF export (the logic)
+│       ├── version.py                        the single version number
+│       └── resources/                        icons/Logo.svg, docs/Overview.md
+├── tests/
+│   ├── report_order.py                       headless order check  (freecadcmd)
+│   └── check_timelapse.py                    output-folder verifier (plain python)
+└── dev/
+    └── Selection_interface_for_LLM.FCMacro   developer shim, NOT part of the addon
 ```
+
+## Install
+
+**As an addon (recommended).** Copy or clone this repository into the `Mod` folder
+of your FreeCAD user data, so that `package.xml` ends up at
+`<user>/Mod/Selection_interface_for_LLM/package.xml`, then restart FreeCAD. The
+workbench **Selection interface** appears in the workbench selector, with the
+toolbar commands *Building steps panel* and *GIF of the whole build*. On Windows
+`<user>` is `%APPDATA%\FreeCAD\v1-1`; `FreeCAD.getUserAppDataDir()` gives the
+right folder on every system.
+
+**As a macro (development).** `dev/Selection_interface_for_LLM.FCMacro` can be put
+in the macro folder and run from `Macro > Macros...`; it finds the package, loads
+it and opens the panel. It exists only to work on a checkout — the addon never
+manipulates `sys.path`, the shim does.
 
 ## Use
 
-1. Open the part, `Macro > Macros... > Selection_interface_for_LLM.FCMacro > Execute`.
+1. Activate the **Selection interface** workbench and click **Building steps
+   panel** (or run the macro, in development).
 2. A dock named **Selection interface for LLM - building steps** appears on the right. At the top, the
    **display** list chooses how everything is drawn: `solid + edges`, `solid`,
    `edges only`, `transparent`, `points`. Just below, the **show also** boxes choose
@@ -36,8 +63,7 @@ How to turn this macro into an indexed FreeCAD addon (workbench content,
 
    Below them, the recovered computation order is listed: `#`, feature label,
    `type <- what it consumes`. Datum planes, lines, points and coordinate systems
-   are steps like any other feature.
-3. `step >` / `< step`, the spin box, or clicking a row moves the development
+   are steps like any other feature.3. `step >` / `< step`, the spin box, or clicking a row moves the development
    level and the 3D view shows exactly what that level holds: the last built
    feature of every body, the datums reached so far, and the **sketch that gives
    birth to the selected feature** (highlighted orange, with its body shown

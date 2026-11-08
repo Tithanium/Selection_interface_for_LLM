@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-"""selection_interface_for_llm_lib.py -- progressive-build timelapse for FreeCAD 1.1.x.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+"""interface.py -- progressive-build timelapse for FreeCAD 1.1.x
+(Selection interface for LLM, a FreeCAD addon).
 
 Purpose
 -------
@@ -49,7 +51,11 @@ except Exception:  # pragma: no cover - headless
     FreeCADGui = None
     GUI = False
 
-VERSION = "2.0.0"
+try:                     # the package owns the version number (see version.py)
+    from .version import __version__ as VERSION
+except ImportError:      # direct run: python interface.py <file.FCStd>
+    VERSION = "2.1.0"
+
 LIB_NAME = "Selection_interface_for_LLM"
 DOCK_NAME = "Selection_interface_for_LLM_Dock"
 PANEL_NAME = "Selection_interface_for_LLM_Panel"
@@ -1244,32 +1250,49 @@ def latest_gif(doc=None):
     return best[1] if best else None
 
 
-def reveal_in_explorer(path):
-    """Open the folder that holds *path*, with the file selected."""
+def _desktop_open(path):
+    """Open a file or a folder with the handler the desktop is configured with.
+
+    Qt first (it exists whenever the panel exists, and it keeps the addon free of
+    shell strings), then one fallback per platform.  This replaces the previous
+    Windows-only os.startfile / explorer.exe call, which made the addon unusable
+    on Linux and macOS.
+    """
     path = os.path.normpath(path)
-    folder = os.path.dirname(path)
-    try:
-        import subprocess
-        subprocess.Popen(["explorer", "/select," + path])
-        return True
-    except Exception as exc:
-        warn("explorer /select failed (%s), opening the folder instead" % exc)
-    try:
-        os.startfile(folder)
-        return True
-    except Exception as exc:
-        warn("cannot open %s: %s" % (folder, exc))
+    if not os.path.exists(path):
+        warn("cannot open %s: it does not exist" % path)
         return False
-
-
-def open_with_system(path):
-    """Hand the file to its default Windows application (photo/GIF viewer)."""
     try:
-        os.startfile(os.path.normpath(path))
+        from PySide import QtCore, QtGui
+
+        if QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path)):
+            return True
+    except Exception as exc:
+        warn("Qt could not open %s (%s)" % (path, exc))
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)  # noqa: only reached when Qt failed
+        else:
+            import subprocess
+
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.Popen([opener, path])
         return True
     except Exception as exc:
         warn("cannot open %s: %s" % (path, exc))
         return False
+
+
+def reveal_in_file_manager(path):
+    """Show the folder that holds *path* in the file manager of the system."""
+    path = os.path.normpath(path)
+    folder = os.path.dirname(path) or "."
+    return _desktop_open(folder)
+
+
+def open_with_system(path):
+    """Hand the file to the default application of the system (image viewer)."""
+    return _desktop_open(path)
 
 
 def make_output_dir(doc, root=None):
@@ -1654,6 +1677,34 @@ def unique_mod_path(doc):
     return candidate
 
 
+def llm_request_dir():
+    """Folder that holds the requests handed over to an LLM."""
+    return os.path.join(timelapse_root(), "llm_requests")
+
+
+def write_llm_request(prompt, doc=None, step=None):
+    """Write *prompt* next to the run folders and return its path.
+
+    A file is more dependable than the clipboard: an agent can be pointed at a
+    path, the request survives a paste that fails, and the user keeps a trace of
+    what was asked and of the feature it was asked about.
+    """
+    folder = llm_request_dir()
+    os.makedirs(folder, exist_ok=True)
+    doc_label = (doc.Label or doc.Name) if doc is not None else "document"
+    safe_doc = "".join(c if c.isalnum() or c in "-_" else "_" for c in doc_label)
+    index = int((step or {}).get("index") or 0)
+    safe_step = "".join(c if c.isalnum() or c in "-_" else "_"
+                        for c in (step or {}).get("label", ""))
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    name = "%s_step%02d%s_%s.md" % (safe_doc, index,
+                                    ("_" + safe_step) if safe_step else "", stamp)
+    path = os.path.join(folder, name)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(prompt if prompt.endswith("\n") else prompt + "\n")
+    return path
+
+
 def build_llm_prompt(doc, tl, step, request, new_path=None):
     """Ready-to-paste request: the file, the selected feature and the change."""
     src = os.path.normpath(doc.FileName or "")
@@ -1707,11 +1758,26 @@ def build_llm_prompt(doc, tl, step, request, new_path=None):
 
     lines.append("FreeCAD modification request - change ONE feature of a part, on a copy.")
     lines.append("")
-    lines.append("Before touching anything, load the `freecad` skill (and `freecad-mcp` if "
-                 "you drive the GUI) and follow it:")
-    lines.append("it lists the verified traps of this machine (saving from the GUI, "
-                 "getObject() taking the internal Name")
-    lines.append("and not the Label, proving a change with a screenshot).")
+    lines.append("0. HOW TO WORK ON THIS (tooling)")
+    lines.append("   - If your agent has a FreeCAD skill or a FreeCAD MCP toolset, load it "
+                 "and follow it: this")
+    lines.append("     addon ships no skill and contacts no service, it only describes the "
+                 "work to be done.")
+    lines.append("   - Drive a GUI session only through a bridge the user has already "
+                 "started (for example an")
+    lines.append("     XML-RPC/MCP FreeCAD server on 127.0.0.1:9875): starting a server is "
+                 "the user's decision.")
+    lines.append("   - Headless checks: `freecadcmd your_probe.py` (freecadcmd sits in the "
+                 "bin/ folder of the")
+    lines.append("     FreeCAD install). It prints little and still exits 0 after an "
+                 "exception, so assert on")
+    lines.append("     printed values, never on the exit code alone.")
+    lines.append("   - freecadcmd and the GUI are different worlds: a headless pass cannot "
+                 "prove anything visual")
+    lines.append("     (camera, colours, screenshots) - those need the GUI.")
+    lines.append("   - Prove the result with files and numbers: volume before/after, face "
+                 "count, shape validity,")
+    lines.append("     and a screenshot of the 3D view for the visual part.")
     lines.append("")
     lines.append("1. SOURCE FILE - READ ONLY, IT MUST NOT BE MODIFIED")
     add(lines, "folder", folder)
@@ -1819,7 +1885,7 @@ if GUI:
             row.addStretch(1)
             row.addWidget(self.close_btn)
             lay.addLayout(row)
-            self.folder_btn.clicked.connect(lambda: reveal_in_explorer(self.path))
+            self.folder_btn.clicked.connect(lambda: reveal_in_file_manager(self.path))
             self.sys_btn.clicked.connect(lambda: open_with_system(self.path))
             self.close_btn.clicked.connect(self.close)
             self.open_path(gif_path)
@@ -1883,6 +1949,7 @@ if GUI:
             self.last_result = None
             self.last_prompt = ""
             self.last_prompt_path = ""
+            self.last_prompt_file = ""
             self.display = DISPLAY_MODES[0][0]
             self._build_ui()
             self.refresh(initial=True)
@@ -2247,13 +2314,20 @@ if GUI:
                 return
             self.last_prompt = prompt
             self.last_prompt_path = new_path
+            self.last_prompt_file = ""
+            try:
+                self.last_prompt_file = write_llm_request(prompt, self.doc, step)
+            except Exception as exc:
+                warn("cannot write the request to a file: %s" % exc)
             clipboard = QtWidgets.QApplication.clipboard()
             if clipboard is not None:
                 clipboard.setText(prompt)
             self.status.setText(
                 "request copied to the clipboard: step %d/%d %s (%s)\n"
+                "also written to %s\n"
                 "paste it into your LLM; it asks for a copy saved as %s (%d characters)"
                 % (step["index"], self.count(), step["label"], step["type"],
+                   self.last_prompt_file or "(the request file could not be written)",
                    os.path.basename(new_path), len(prompt)))
             log("LLM request for step %d %s -> %s"
                 % (step["index"], step["label"], new_path))
@@ -2275,7 +2349,7 @@ if GUI:
             except Exception as exc:
                 warn("in-FreeCAD preview failed (%s), using the Windows viewer" % exc)
                 open_with_system(gif)
-            reveal_in_explorer(gif)
+            reveal_in_file_manager(gif)
             self.status.setText("GIF: %s" % gif)
             log("open GIF: " + gif)
 
@@ -2334,7 +2408,7 @@ def open_panel():
 
 
 # --------------------------------------------------------------------------
-# headless report (freecadcmd): python selection_interface_for_llm_lib.py <file.FCStd>
+# headless report (freecadcmd): python interface.py <file.FCStd>   (see tests/report_order.py)
 # --------------------------------------------------------------------------
 def report(path):
     doc = FreeCAD.openDocument(path)

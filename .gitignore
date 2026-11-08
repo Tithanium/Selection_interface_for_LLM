@@ -1,2 +1,13 @@
 # python byte code
 __pycache__/
+*.py[cod]
+
+# development leftovers
+.ruff_cache/
+.codespellrc.local
+build/
+dist/
+*.egg-info/
+
+# run folders produced by the tool never live here, but a stray one must not be committed
+FreeCAD_timelapse/

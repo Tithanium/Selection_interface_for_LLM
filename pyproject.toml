@@ -1,0 +1,48 @@
+# Packaging metadata for development tools only: the addon itself is installed by
+# copying (or cloning) this repository into <user>/Mod/Selection_interface_for_LLM,
+# or from the FreeCAD Addon Manager once the addon is indexed.
+# References: https://packaging.python.org/en/latest/guides/packaging-namespace-packages/
+#             https://packaging.python.org/en/latest/specifications/declaring-project-metadata/
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "freecad-selection-interface-for-llm"
+dynamic = ["version"]
+description = "FreeCAD addon that steps through the computation order of a PartDesign document and exports the build-up as a GIF"
+readme = "README.md"
+license = "LGPL-2.1-or-later"
+license-files = [
+    "LICENSE-Code",
+    "LICENSE-Assets",
+]
+maintainers = [
+    { name = "Tithanium", email = "tithanium@gmail.com" },
+]
+requires-python = ">=3.10"
+
+[dependency-groups]
+dev = [
+    "PySide6",
+    "ruff",
+    "codespell",
+    "freecad-typings",
+    "pillow",
+    "numpy",
+]
+
+[project.urls]
+source = "https://github.com/Tithanium/Selection_interface_for_LLM"
+issues = "https://github.com/Tithanium/Selection_interface_for_LLM/issues"
+
+[tool.hatch.version]
+path = "freecad/SelectionInterfaceForLLM/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["freecad"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

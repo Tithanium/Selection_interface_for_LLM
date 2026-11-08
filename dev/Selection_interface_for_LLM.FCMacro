@@ -1,0 +1,98 @@
+# -*- coding: utf-8 -*-
+# SPDX-License-Identifier: LGPL-2.1-or-later
+"""DEVELOPER SHIM - this file is NOT part of the addon.
+
+The addon is the repository folder itself, installed by copying (or cloning) it
+into ``<user>/Mod/Selection_interface_for_LLM``; FreeCAD then provides the
+"Selection interface" workbench with its two commands, and this macro is not
+needed at all.
+
+It is kept for development only, so the panel can still be opened from
+Macro > Macros... while working on a checkout: it finds the ``freecad`` package
+folder of the addon, imports ``SelectionInterfaceForLLM`` and calls its
+``open_panel()``.  The addon itself never manipulates ``sys.path``; this shim
+does, which is exactly why it lives in ``dev/`` and not in the package.
+"""
+
+import importlib
+import os
+import sys
+
+LIB_NAME = "SelectionInterfaceForLLM"
+REPO_NAME = "Selection_interface_for_LLM"
+
+
+def _candidate_parents():
+    """Every place where a ``freecad/LIB_NAME`` package folder may live."""
+    parents = []
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        here = ""
+    if here:
+        # the shim runs from <repo>/dev/ , from the repo root, or from the Macro
+        # folder that contains the checkout as a subfolder
+        parents += [
+            os.path.join(here, "freecad"),
+            os.path.join(os.path.dirname(here), "freecad"),
+            os.path.join(here, REPO_NAME, "freecad"),
+        ]
+    try:
+        import FreeCAD
+
+        user = FreeCAD.getUserAppDataDir()
+        parents.append(os.path.join(user, "Mod", REPO_NAME, "freecad"))
+        mod = os.path.join(user, "Mod")
+        if os.path.isdir(mod):
+            for name in sorted(os.listdir(mod)):
+                parents.append(os.path.join(mod, name, "freecad"))
+        for base in (FreeCAD.getUserMacroDir(True), FreeCAD.getUserMacroDir(False)):
+            parents.append(os.path.join(base, REPO_NAME, "freecad"))
+    except Exception:
+        pass
+    return [p for p in parents if p]
+
+
+def _find_package_parent():
+    tried = []
+    for parent in _candidate_parents():
+        tried.append(parent)
+        if os.path.isfile(os.path.join(parent, LIB_NAME, "__init__.py")):
+            return parent, tried
+    raise ImportError(
+        "cannot find the %s addon package (%s/__init__.py).\nLooked in:\n  %s\n"
+        "Install the addon by copying the repository into <user>/Mod/, or run this "
+        "macro from the checkout." % (LIB_NAME, LIB_NAME,
+                                      "\n  ".join(tried) or "(nowhere)"))
+
+
+def _import_interface(parent):
+    """Prefer the module FreeCAD itself loaded (freecad.<pkg>), not a second copy.
+
+    An installed addon is imported by FreeCAD as ``freecad.<pkg>``; importing the
+    same files again under the bare package name would give two module objects,
+    two panel classes and two overlay states, so the namespaced module wins
+    whenever it exists.
+    """
+    namespaced = "freecad." + LIB_NAME + ".interface"
+    if namespaced in sys.modules:
+        return importlib.reload(sys.modules[namespaced])
+    try:
+        return importlib.reload(importlib.import_module(namespaced))
+    except ImportError:
+        pass
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+    # never run a stale module after an edit
+    return importlib.reload(importlib.import_module(LIB_NAME + ".interface"))
+
+
+def open_panel():
+    parent, tried = _find_package_parent()
+    module = _import_interface(parent)
+    print("[selection] addon package: %s" % os.path.dirname(module.__file__))
+    print("[selection] version %s" % getattr(module, "VERSION", "?"))
+    return module.open_panel()
+
+
+open_panel()

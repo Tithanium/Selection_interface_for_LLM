@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Selection interface for LLM: the steps of a build, one highlighted, and a play mark. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <g stroke="#2e3436" stroke-width="2" stroke-linejoin="round">
+    <rect x="5" y="8" width="26" height="9" rx="2" fill="#d3d7cf"/>
+    <rect x="5" y="21" width="38" height="9" rx="2" fill="#d3d7cf"/>
+    <rect x="5" y="34" width="30" height="9" rx="2" fill="#ff7f2a"/>
+    <rect x="5" y="47" width="46" height="9" rx="2" fill="#d3d7cf"/>
+  </g>
+  <path d="M40 30 L54 38 L40 46 Z" fill="#3465a4" stroke="#204a87" stroke-width="2"
+        stroke-linejoin="round"/>
+</svg>

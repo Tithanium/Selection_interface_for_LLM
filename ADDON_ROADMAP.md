@@ -19,6 +19,25 @@ Everything below is checked against the current official documentation,
 | a macro-shaped addon example | `Source/Demos/Macro/index.md` |
 | scaffolding generator | https://github.com/FreeCAD/Addon-Template |
 
+## 0. Status (2026-11-08, version 2.1.0)
+
+Done in the repository:
+
+| item | where |
+|---|---|
+| namespaced layout `freecad/SelectionInterfaceForLLM/` | `__init__.py`, `init_gui.py`, `commands.py`, `workbench.py`, `interface.py`, `version.py` |
+| workbench + two commands instead of a macro | `workbench.py` (`SelectionInterfaceWorkbench`), `commands.py` |
+| `package.xml` with every required tag, maintainer `tithanium@gmail.com`, `<freecadmin>1.1.0</freecadmin>`, branch `main` | `package.xml` |
+| licenses + SPDX headers + icon | `LICENSE-Code` (LGPL-2.1-or-later), `LICENSE-Assets` (CC-BY-SA-4.0), `resources/icons/Logo.svg` |
+| no `sys.path` manipulation, no global module names | the `.FCMacro` moved to `dev/` as a developer shim |
+| no Windows-only call | `_desktop_open()` uses `QDesktopServices.openUrl` with `open`/`xdg-open` fallbacks |
+| `pyproject.toml`, `CHANGELOG.md` | repository root |
+
+Still to do before submitting to the index: translations (optional), 30 days of
+repository age, evidence of real users, the forum/issue submission itself, and a
+long-lived `main` release branch with a separate development branch (§6).
+
+
 ## 1. The shape to choose: workbench, not macro
 
 The documentation distinguishes the content types `workbench`, `macro`,
@@ -92,7 +111,23 @@ class SelectionInterfaceWorkbench(FreeCADGui.Workbench):
     Icon = "resources/icons/Logo.svg"   # must match <classname> in package.xml
 ```
 
-## 3. `package.xml` — draft, ready to fill in
+## 3. `package.xml` — shipped
+
+The manifest is in the repository (`package.xml`) and was written from the tag list
+in `Manifest/index.md`: `name`, `version`, `date`, `description`, `maintainer`
+(with `email`), two `<license file=...>` entries, `<icon>`, `<content>` with
+`<other/>` plus a `<workbench>` element carrying `<classname>`,
+`<subdirectory>./</subdirectory>` and its own `<icon>`, and the `<url>` tags whose
+`type="repository"` entry names `branch="main"` — the branch the addon is
+published from, which is why the repository is on `main` and not `master`.
+
+How FreeCAD reads it (checked in `src/Gui/FreeCADGuiInit.py`): a namespaced addon
+is loaded by `ExtModGui`, which imports `<mod>.init_gui` — for this addon
+`freecad.SelectionInterfaceForLLM.init_gui` — while the `<classname>` of the legacy
+`DirModGui` branch is only used to attach the packaged icon. That is why
+`init_gui.py` registers the workbench itself instead of exporting a class FreeCAD
+would instantiate.
+
 
 Required tags per `Manifest/index.md`: `name`, `version`, `date`, `description`,
 `maintainer`, `license`, `icon`, `content`. `<url type="repository">` is required and
@@ -216,3 +251,45 @@ Facts quoted above were read on 2026-11-08 from:
 * `gh api repos/FreeCAD/Addons/contents/Data/Python/3.14/Allowed-Packages` — 114
   entries, `numpy` and `pillow` present
 * `gh api repos/FreeCAD/Addon-Template` — "Minimal FreeCAD Addon Template"
+* `raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Gui/FreeCADGuiInit.py` —
+  `ExtModGui.run_init_gui` does `importlib.import_module(f"{self.mod.name}.init_gui")`
+  (line 468) and `DirModGui.process_metadata` builds the workbench folder from
+  `<subdirectory>` (line 430) and looks the class up by `<classname>` (line 438)
+
+## 8. Should the addon ship an agent skill, or an MCP server?
+
+No, and this is a deliberate design decision rather than an omission.
+
+* An indexed addon must not require dependencies that are not functionally
+  necessary, must not do network access or other global work at import, and must be
+  open about any external connection it makes (`Qualities#Compliance`). Shipping an
+  MCP client, an HTTP client or an agent runtime inside a FreeCAD addon breaks all
+  three.
+* The FreeCAD MCP bridge is itself an addon (`FreeCADMCP`) with its own XML-RPC
+  server and its own security settings (allowed IPs, auth token). Starting a server
+  is a decision of the *user*, not something a modelling tool should do behind their
+  back.
+* An agent skill is machine-specific tooling (paths, traps, pi/Claude/Codex
+  specifics). Vendoring it into the addon is the kind of bundling the dependency
+  rules discourage, and it would be stale within weeks.
+
+What the addon does instead, in `build_llm_prompt()`:
+
+1. it writes a self-contained request to
+   `<Downloads>/FreeCAD_timelapse/llm_requests/<doc>_step<NN>_<label>_<stamp>.md`
+   (and copies the same text to the clipboard), so an agent can be pointed at a
+   **file path** instead of a paste;
+2. section 0 of that request tells the agent to load **its own** FreeCAD skill or MCP
+   toolset if it has one, to drive a GUI session only through a bridge the user has
+   already started, to use `freecadcmd` for headless checks, to remember that
+   `freecadcmd` exits 0 even after an exception (assert on printed values), and that a
+   headless pass proves nothing visual;
+3. the rest of the request is the part only FreeCAD can know: the source file with its
+   SHA256 to compare, the copy to produce, the selected feature with its internal
+   Name, type, source sketch or pattern, parameters and volume, the whole computation
+   order of the document, and the conditions the result must satisfy (clean recompute,
+   nothing else changed, before/after numbers, screenshot, ask if ambiguous).
+
+The addon therefore prepares the *work package*; the agent and its own skill do the
+editing. That keeps the addon indexable, testable offline, and usable with any LLM.
+

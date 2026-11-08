@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-\n# SPDX-License-Identifier: LGPL-2.1-or-later
 """report_order.py -- headless check of the recovered computation order.
 
     freecadcmd.exe report_order.py <file.FCStd> [json=<out.json>]
@@ -14,11 +14,14 @@ import sys
 
 import FreeCAD
 
+# The addon is a package under <repo>/freecad/, so the check drives the very same
+# module the installed addon imports (no copy, no second source of truth).
 HERE = os.path.dirname(os.path.abspath(__file__))
-if HERE not in sys.path:
-    sys.path.insert(0, HERE)
+PKG_PARENT = os.path.join(os.path.dirname(HERE), "freecad")
+if PKG_PARENT not in sys.path:
+    sys.path.insert(0, PKG_PARENT)
 
-import selection_interface_for_llm_lib as tl  # noqa: E402
+from SelectionInterfaceForLLM import interface as tl  # noqa: E402
 
 
 def main():

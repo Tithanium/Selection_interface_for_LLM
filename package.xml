@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- For the meaning of every tag see
+     https://freecad.github.io/Addon-Academy/Topics/Structuring/Manifest/ -->
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+
+  <!--[ Info ]-->
+
+  <name>Selection interface for LLM</name>
+  <description>Steps through the real computation order of a PartDesign document: shows one feature at a time, datum planes and the driving sketch included, without modifying the document; keeps the viewing angle and exports the build-up as a GIF; and copies a ready-to-use description of one feature to the clipboard for an LLM.</description>
+  <version>2.1.0</version>
+  <date>2026-11-08</date>
+
+  <!--[ Ecosystem requirements ]-->
+
+  <freecadmin>1.1.0</freecadmin>
+  <pythonmin>3.10</pythonmin>
+
+  <!--[ Tags ]-->
+
+  <tag>PartDesign</tag>
+  <tag>Animation</tag>
+  <tag>Documentation</tag>
+  <tag>LLM</tag>
+
+  <!--[ Maintainers and authors ]-->
+
+  <maintainer email="tithanium@gmail.com">Tithanium</maintainer>
+  <author>Tithanium</author>
+
+  <!--[ Licenses ]-->
+
+  <license file="LICENSE-Code">LGPL-2.1-or-later</license>
+  <license file="LICENSE-Assets">CC-BY-SA-4.0</license>
+
+  <!--[ Icon ]-->
+
+  <icon>freecad/SelectionInterfaceForLLM/resources/icons/Logo.svg</icon>
+
+  <!--[ Urls ]-->
+
+  <url type="repository" branch="main">https://github.com/Tithanium/Selection_interface_for_LLM</url>
+  <url type="readme">https://github.com/Tithanium/Selection_interface_for_LLM/refs/heads/main/README.md</url>
+  <url type="bugtracker">https://github.com/Tithanium/Selection_interface_for_LLM/issues/</url>
+  <url type="documentation">https://github.com/Tithanium/Selection_interface_for_LLM/tree/main/freecad/SelectionInterfaceForLLM/resources/docs/</url>
+
+  <!--[ Content ]-->
+
+  <content>
+    <other/>
+    <workbench>
+      <name>Selection interface for LLM</name>
+      <classname>SelectionInterfaceWorkbench</classname>
+      <description>Panel and commands that step through the computation order of a document and export the build-up as a GIF</description>
+      <subdirectory>./</subdirectory>
+      <icon>freecad/SelectionInterfaceForLLM/resources/icons/Logo.svg</icon>
+    </workbench>
+  </content>
+
+</package>
