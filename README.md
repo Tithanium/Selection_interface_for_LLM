@@ -57,6 +57,37 @@ export that walk as a GIF.
    **copy to clipboard description for LLM**: a self-contained request is copied,
    ready to paste into an LLM session (see below).
 
+## The profile of the selected feature, as a thick orange line
+
+The sketch that gives birth to the selected feature is highlighted in orange.
+Drawing it as a line is not enough: the OpenGL driver clamps the width of a drawn
+line, so `LineWidth` stops having an effect. Measured on this machine, orange
+pixels of the profile in a 900x640 capture of `_02_seringue_cardanV3`:
+
+| `LineWidth` | 1.0 | 3.0 | 6.0 | 10.0 |
+|---|---|---|---|---|
+| orange pixels | 709 | 850 | 1017 | 1219 |
+
+and `PointSize` (with `DisplayMode = 'Points'`) changes nothing at all (686 at 2,
+642 at 12). So the profile is rebuilt as a chain of small tubes placed in the
+**Coin scene graph** of the 3D view instead of in the document:
+
+* the tubes are sized from the camera zoom (`cam.height / viewport pixels`), so the
+  line looks the same width (`PROFILE_LINE_PIXELS = 5.5`) at any zoom instead of
+  being scaled with the part;
+* the chain is wrapped in `SoAnnotation`, which is drawn after the model with the
+  depth test off, so the profile is not swallowed by the material it is padded or
+  revolved into;
+* nothing is added to the document — removing the node restores the exact view, and
+  the overlay is dropped by `restore_state()`, by 'restore original', by closing the
+  dock and by any level change without a profile;
+* GIF frames skip it (`see_through=False`), so the animation stays clean and does
+  not flicker between a thin and a thick profile.
+
+Measured effect on the piston revolution profile (`_02_piston_cardanV3` step 11, no
+overlay vs overlay): 2566 -> 10809 orange pixels, and the line reads 7 px wide
+where the sketch's own line is 4 px at that zoom (1-2 px at normal zoom).
+
 ## Two objects, one surface (z-fighting)
 
 On `02_seringue_cardanV3`, step 59 fuses the two halves of the encastrement and step

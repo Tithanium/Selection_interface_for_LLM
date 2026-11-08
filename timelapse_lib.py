@@ -49,7 +49,7 @@ except Exception:  # pragma: no cover - headless
     FreeCADGui = None
     GUI = False
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 LIB_NAME = "Timelapse_Features"
 DOCK_NAME = "Timelapse_Features_Dock"
 PANEL_NAME = "Timelapse_Features_Panel"
@@ -92,6 +92,12 @@ DISPLAY_MODES = (
 )
 SKETCH_LINE_WIDTH = 3.0
 SKETCH_LINE_COLOR = (1.0, 0.45, 0.0)      # the profile of the selected feature
+# The OpenGL driver clamps the width of a drawn line, so raising LineWidth stops
+# having any effect (measured on this box: orange pixels 709 at width 1.0, 850 at
+# 3.0, 1017 at 6.0, 1219 at 10.0, and PointSize is ignored completely).  A really
+# thick profile is therefore drawn as small tubes in the Coin scene graph, sized
+# in pixels so the thickness does not depend on the zoom.
+PROFILE_LINE_PIXELS = 5.5                  # apparent diameter of the tube, in pixels
 PROFILE_TRANSPARENCY = 70                  # see the profile through the material
 
 # containers are not steps: a step that links one of them consumes everything
@@ -489,6 +495,7 @@ def restore_state(doc, snap):
             except Exception:
                 pass
     doc.recompute()
+    clear_profile_overlay()
     if problems:
         warn("restore problems: " + "; ".join(problems))
     return problems
@@ -568,6 +575,141 @@ def _sketch_highlight(vo):
             setattr(vo, attr, value)
         except Exception:
             pass
+
+
+_OVERLAY = {"node": None, "view": None}
+
+
+def _overlay_root(view):
+    """The Coin scene graph the 3D view draws from (None without a GUI)."""
+    if not GUI:
+        return None
+    try:
+        return view.getViewer().getSceneGraph()
+    except Exception:
+        return None
+
+
+def clear_profile_overlay(view=None):
+    """Remove the thick profile from the 3D view (safe to call any time)."""
+    node = _OVERLAY.get("node")
+    owner = _OVERLAY.get("view")
+    _OVERLAY["node"] = None
+    _OVERLAY["view"] = None
+    if node is None:
+        return 0
+    root = _overlay_root(owner or view)
+    if root is None:
+        return 0
+    try:
+        root.removeChild(node)
+        return 1
+    except Exception:
+        return 0
+
+
+def _pixel_size_mm(view, pixels):
+    """How many millimetres 'pixels' covers on screen, from the camera zoom."""
+    try:
+        cam = view.getCameraNode()
+        height_mm = float(cam.height.getValue())
+        view_px = float(list(view.getSize())[1] or 0)
+        if height_mm > 1e-6 and view_px > 10:
+            return height_mm / view_px * float(pixels)
+    except Exception:
+        pass
+    return 0.0
+
+
+def show_profile_overlay(view, sketch, pixels=None):
+    """Draw the profile of the selected feature as a thick line.
+
+    A drawn line has a width that the OpenGL driver clamps (measured here:
+    raising LineWidth from 1 to 10 only took the orange pixels from 709 to
+    1219, and PointSize changes nothing), so the profile is rebuilt as a chain
+    of small tubes in the Coin scene graph instead.  They live in the scene,
+    not in the document, so the model is left untouched, and they are sized in
+    pixels so the line looks the same at any zoom.
+    """
+    clear_profile_overlay(view)
+    if not GUI or sketch is None:
+        return 0
+    radius = 0.5 * _pixel_size_mm(view, PROFILE_LINE_PIXELS if pixels is None
+                                  else pixels)
+    if radius <= 0:
+        return 0
+    try:
+        import pivy.coin as coin
+    except Exception:
+        warn("pivy is not available: the profile is drawn as a thin line only")
+        return 0
+    shape = getattr(sketch, "Shape", None)
+    edges = list(getattr(shape, "Edges", []) or []) if shape is not None else []
+    root = _overlay_root(view)
+    if not edges or root is None:
+        return 0
+    col = SKETCH_LINE_COLOR
+    sep = coin.SoSeparator()
+    mat = coin.SoMaterial()
+    # a flat, self-lit colour: a shaded tube would show a dark side and read as
+    # a rope rather than as a line
+    mat.diffuseColor = coin.SbColor(col[0], col[1], col[2])
+    mat.emissiveColor = coin.SbColor(col[0] * 0.85, col[1] * 0.62, col[2] * 0.25)
+    mat.specularColor = coin.SbColor(0.0, 0.0, 0.0)
+    mat.shininess = 0.1
+    sep.addChild(mat)
+    drawn = 0
+    for edge in edges:
+        if drawn > 600:
+            break
+        try:
+            length = float(edge.Length)
+            # deflection = the tube radius, so the chain of tubes never shows a
+            # facet bigger than the line is wide
+            pts = edge.discretize(Deflection=max(radius, 1e-4))
+            if len(pts) > 400 or len(pts) < 2:
+                pts = edge.discretize(int(max(8, min(200,
+                                                     length / max(radius, 1e-6)) + 1)))
+        except Exception:
+            continue
+        for i in range(len(pts) - 1):
+            a, b = pts[i], pts[i + 1]
+            d = b - a
+            seg = d.Length
+            if seg <= 1e-9:
+                continue
+            try:
+                tr = coin.SoTransform()
+                tr.translation = coin.SbVec3f((a.x + b.x) * 0.5,
+                                              (a.y + b.y) * 0.5,
+                                              (a.z + b.z) * 0.5)
+                tr.rotation = coin.SbRotation(
+                    coin.SbVec3f(0.0, 1.0, 0.0),
+                    coin.SbVec3f(d.x / seg, d.y / seg, d.z / seg))
+                cyl = coin.SoCylinder()
+                cyl.radius = radius
+                cyl.height = seg
+                sub = coin.SoSeparator()
+                sub.addChild(tr)
+                sub.addChild(cyl)
+                sep.addChild(sub)
+                drawn += 1
+            except Exception:
+                continue
+    if not drawn:
+        return 0
+    try:
+        # SoAnnotation draws after the model with the depth test off, so the profile
+        # is not swallowed by the material it is revolved/padded into
+        node = coin.SoAnnotation()
+        node.addChild(sep)
+        root.addChild(node)
+    except Exception as exc:
+        warn("could not draw the thick profile: %s" % exc)
+        return 0
+    _OVERLAY["node"] = node
+    _OVERLAY["view"] = view
+    return drawn
 
 
 def see_through_body(doc, step, value=PROFILE_TRANSPARENCY):
@@ -752,6 +894,17 @@ def apply_level(doc, tl, level, recompute=True, mode=None, show_sketch=True,
         if see_through and current is not None and (focus is not None
                                                     or current.get("dup")):
             see_through_body(doc, current)
+    if GUI:
+        # the profile as a thick line: only while browsing (a GIF frame must not
+        # flicker between a thin and a thick profile)
+        try:
+            view = active_view()
+            if see_through and focus is not None:
+                show_profile_overlay(view, focus)
+            else:
+                clear_profile_overlay(view)
+        except Exception:
+            pass
     if recompute:
         doc.recompute()
     return level
@@ -1214,6 +1367,7 @@ def build_timelapse(doc, tl=None, duration_ms=700, max_px=1000,
 
     view = active_view()
     snap = snapshot_state(doc)
+    clear_profile_overlay(view)        # a GIF frame must not carry browsing extras
     saved_camera = camera_snapshot(view)
     old_anim = animation_duration(0)
     started = time.time()
@@ -1887,6 +2041,7 @@ if GUI:
                 newdoc = active_document()
                 if self.doc is not None and self.doc.Name != newdoc.Name:
                     self.snapshot = None      # the old snapshot belongs to another document
+                    clear_profile_overlay()   # and so does the thick profile overlay
                 self.doc = newdoc
                 self.tl = timeline(self.doc)
             except Exception as exc:
