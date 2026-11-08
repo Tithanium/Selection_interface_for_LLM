@@ -3,6 +3,11 @@
 Watch a finished PartDesign part being built again, one feature at a time, and
 export that walk as a GIF.
 
+Repository: <https://github.com/Tithanium/Selection_interface_for_LLM> — version 2.0.0.
+How to turn this macro into an indexed FreeCAD addon (workbench content,
+`package.xml`, license, gap list, submission route) is studied in
+[ADDON_ROADMAP.md](ADDON_ROADMAP.md).
+
 ```
 %APPDATA%\FreeCAD\v1-1\Macro\            ( = FreeCAD.getUserMacroDir(True) )
 ├── Selection_interface_for_LLM.FCMacro           <- the file Macro > Macros... runs
