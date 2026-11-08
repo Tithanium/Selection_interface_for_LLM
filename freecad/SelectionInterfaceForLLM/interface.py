@@ -54,7 +54,7 @@ except Exception:  # pragma: no cover - headless
 try:                     # the package owns the version number (see version.py)
     from .version import __version__ as VERSION
 except ImportError:      # direct run: python interface.py <file.FCStd>
-    VERSION = "2.3.0"
+    VERSION = "2.3.1"
 
 LIB_NAME = "Selection_interface_for_LLM"
 DOCK_NAME = "Selection_interface_for_LLM_Dock"
@@ -437,6 +437,46 @@ def _color_tuple(color):
         return tuple(round(float(c), 4) for c in (color[0], color[1], color[2]))
     except Exception:
         return None
+
+
+def clean_kept_state(doc, snap):
+    """Leave the build on screen, but without the browsing aids.
+
+    A kept view must look like the part at that step, not like a browsing state:
+    the profile sketch and its thick orange line are what the see-through
+    transparency exists for, so they go away and every object gets its own
+    transparency back (measured on _02_seringue_cardanV3: the selected step's
+    body members are raised to 70 % and the sketch to LineWidth 3.0 orange).
+    Visibility, display mode and the body draw mode are left as browsed.
+    """
+    view = (snap or {}).get("view", {})
+    sketches = 0
+    cleared = 0
+    problems = []
+    for obj in doc.Objects:
+        vo = getattr(obj, "ViewObject", None)
+        if vo is None:
+            continue
+        entry = view.get(obj.Name, {})
+        if is_sketch(obj):
+            for attr in ("Visibility", "LineWidth", "LineColor"):
+                if attr not in entry:
+                    continue
+                try:
+                    setattr(vo, attr, entry[attr])
+                    sketches += 1
+                except Exception as exc:
+                    problems.append("%s.%s: %s" % (obj.Name, attr, exc))
+        want = entry.get("Transparency", 0)
+        try:
+            if _view_get(vo, "Transparency") not in (None, want):
+                vo.Transparency = want
+                cleared += 1
+        except Exception as exc:
+            problems.append("%s.Transparency: %s" % (obj.Name, exc))
+    for problem in problems[:5]:
+        warn("kept view: %s" % problem)
+    return {"sketch_properties": sketches, "transparency_reset": cleared}
 
 
 def snapshot_state(doc):
@@ -2218,6 +2258,14 @@ if GUI:
                 show_grid.addWidget(box, index // 2, index % 2)
             outer.addWidget(self.show_box)
 
+            # the behaviour boxes live together, never as a lone row at the bottom
+            self.option_box = QtWidgets.QGroupBox("options")
+            self.option_box.setObjectName("Selection_OptionBox")
+            option_grid = QtWidgets.QGridLayout(self.option_box)
+            option_grid.setContentsMargins(6, 2, 6, 2)
+            option_grid.setHorizontalSpacing(10)
+            option_grid.setVerticalSpacing(1)
+
             self.cb_tree = QtWidgets.QCheckBox("select in the model tree")
             self.cb_tree.setObjectName("Selection_TreeSelect")
             self.cb_tree.setChecked(True)
@@ -2226,19 +2274,20 @@ if GUI:
                 "and selects it, so it can be edited right away (double-click in\n"
                 "the tree). When the profile sketch is shown, the sketch is what\n"
                 "gets selected: that is where the dimensions live")
-            outer.addWidget(self.cb_tree)
-
-            self.cb_keep = QtWidgets.QCheckBox("keep the view on closing")
+            self.cb_keep = QtWidgets.QCheckBox("keep the build on closing")
             self.cb_keep.setObjectName("Selection_KeepState")
             self.cb_keep.setChecked(False)
             self.cb_keep.setToolTip(
                 "Unticked (default): closing the panel -- or 'restore original' --\n"
                 "gives the document its own visibility, display mode, transparency,\n"
                 "colours and selection back.\n"
-                "Ticked: closing the panel leaves the display exactly as it is, so\n"
-                "you can keep working on the part as it was shown at that step.\n"
+                "Ticked: closing the panel leaves the build on screen at the step\n"
+                "you were looking at, but clean -- the profile sketch and its thick\n"
+                "orange line are removed and the parts are drawn opaque again.\n"
                 "The document is never saved either way.")
-            outer.addWidget(self.cb_keep)
+            option_grid.addWidget(self.cb_tree, 0, 0, 1, 2)
+            option_grid.addWidget(self.cb_keep, 1, 0, 1, 2)
+            outer.addWidget(self.option_box)
 
             self.list = QtWidgets.QTreeWidget()
             self.list.setObjectName("Selection_StepList")
@@ -2481,8 +2530,10 @@ if GUI:
             """The 'keep the view on closing' box was ticked or unticked."""
             self.keep_state = bool(self.cb_keep.isChecked())
             if self.keep_state:
-                self.status.setText("closing the panel will keep the display as "
-                                    "it is (the document is still never saved)")
+                self.status.setText("closing the panel will keep the build on "
+                                    "screen, without the profile sketch, the orange "
+                                    "line and the transparency (the document is "
+                                    "still never saved)")
             else:
                 self.status.setText("closing the panel will give the document "
                                     "its own view back")
@@ -2650,14 +2701,19 @@ if GUI:
             if isinstance(panel, SelectionPanel) and panel.snapshot is not None:
                 try:
                     if panel.keep_state:
-                        # the user asked for the display to stay as it is. Only the
-                        # temporary orange profile line goes away: it is drawn in the
-                        # 3D view, not in the document, and it would sit on stale
-                        # geometry as soon as the sketch it follows is edited.
+                        # keep the build, drop the browsing aids: the orange line,
+                        # the profile sketch and the see-through transparency exist
+                        # only to make the sketch readable, and the line would sit on
+                        # stale geometry as soon as that sketch is edited
                         clear_profile_overlay()
-                        log("view kept on close: level %d/%d of %s left as displayed "
-                            "(the temporary profile line is removed)"
-                            % (panel.level, panel.count(), panel.doc.Name))
+                        done = clean_kept_state(panel.doc, panel.snapshot)
+                        pump()
+                        log("view kept on close: level %d/%d of %s left on screen, "
+                            "opaque and without the profile sketch (%d transparency "
+                            "value(s) reset, %d sketch property(ies) restored)"
+                            % (panel.level, panel.count(), panel.doc.Name,
+                               done["transparency_reset"],
+                               done["sketch_properties"]))
                     else:
                         restore_state(panel.doc, panel.snapshot)
                         selection_restore(panel.saved_selection)

@@ -21,11 +21,12 @@ the objects by their dependencies, then checks that order against each body's
   visible even through the material it was padded or revolved into.
 * **A display-style selector**: solid + edges, solid, edges only, transparent,
   points.
-* **`keep the view on closing`** (off by default): closing the panel leaves the
-  display exactly as it was shown at that step, instead of giving the document its
-  own view back — useful to go on working on the part as it was displayed. The
-  document is never saved either way, and the temporary orange profile line is
-  always removed because it is a screen object, not document geometry.
+* **`keep the build on closing`** (off by default): closing the panel leaves the
+  build on screen at the step you were looking at, instead of giving the document
+  its own view back — useful to go on working on the part as it is built at that
+  step. The browsing aids are removed on the way out (orange profile line, profile
+  sketch, see-through transparency), so the part stays opaque. The document is
+  never saved either way.
 * **A GIF of the whole build**: the camera is fitted once on the final part and the
   viewing **angle** is preserved for every frame (the zoom and the centring may
   move); one PNG per step is written to

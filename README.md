@@ -78,7 +78,10 @@ manipulates `sys.path`, the shim does.
    | `other bodies` | the parts built by the other bodies at this level. Unticked, only the body of the selected step is drawn (for a mirror or a boolean, the body it copies) |
    | `base / fused results` | **unticked by default.** A `PartDesign::FeatureBase` / `Part::MultiFuse` / `Part::Fuse` does not build a new shape, it repeats the shape of the pieces it is made from (measured: the BaseFeature of `02_seringue_cardanV3` step 60, its MultiFuse and the two halves it fuses are the same 99563.843 mm3 solid, common volume 100.00 %, same placement). Unticked, such a step is drawn at its own step only and the objects it consumes stop being drawn on their own, so the same surface is never painted twice. Ticked, it stays on screen from its step on, exactly like the tree of the document — the coincident surfaces then shimmer like a mesh |
 
-   Just under them, **`select in the model tree`** (ticked by default) makes
+   Under the box, a second group, **`options`**, holds `select in the model tree`
+   and `keep the build on closing` (both explained below).
+
+   **`select in the model tree`** (ticked by default) makes
    every step click expand the model tree down to what you are looking at and
    select it, so the feature — or the sketch that drives it — can be edited
    straight away (see *Edit the feature right away* below). Untick it to browse
@@ -112,8 +115,8 @@ manipulates `sys.path`, the shim does.
 6. `restore original` (or closing the panel) puts back tips, visibility, display
    mode, transparency, sketch colours **and the selection** the document had
    before the macro touched it. The document is **never saved**. If you would
-   rather keep the display you are looking at, tick **`keep the view on
-   closing`** (see *Keeping the display when the panel is closed* below).
+   rather keep the build you are looking at, tick **`keep the build on closing`**
+   (see *Keeping the build when the panel is closed* below).
 7. Under the buttons, type the change you want in the small text box (e.g.
    `set holes diameter to 5mm`), select the step in the list and click
    **copy to clipboard description for LLM**: a self-contained request is copied,
@@ -152,31 +155,36 @@ calls (`Internal C++ object ... already deleted`): the find-then-use sequence is
 retried after letting the event loop run, and the item is fetched with a single
 `findItems()` call rather than a Python walk.
 
-## Keeping the display when the panel is closed
+## Keeping the build when the panel is closed
 
 By default closing the panel (or pressing `restore original`) gives the document
 its own view back: that is the "the tool changes nothing" promise, and it is what
 makes it safe to open on a part you are working on.
 
 Sometimes you want the opposite: close the panel and **stay** on the step you were
-looking at, to keep working on the part as it is shown — measure it, screenshot
-it, or edit the sketch you just selected. For that, tick
-**`keep the view on closing`**:
+looking at, to keep working on the part as it is built at that step — measure it,
+screenshot it, or edit the feature you just selected. For that, tick
+**`keep the build on closing`** (in the `options` group):
 
-- the 3D view stays exactly as displayed at that step — visibility, display mode,
-  transparency, sketch colours and the selection;
+- the **build stays on screen** at that step: the features visible at that level,
+  the display style you chose, the datum planes, the other bodies;
+- the **browsing aids are removed**: the thick orange profile line, the
+  highlighted **profile sketch** (its own visibility, line width and colour come
+  back) and the **see-through transparency** raised on the selected step's body —
+  so the part is drawn opaque again, as a finished part would be. Measured at
+  step 31 of `_02_seringue_cardanV3`: 27 transparency values reset to 0 and 3
+  sketch properties restored, while the step's own features stay visible;
+- the selection is left alone, so the sketch you had selected is still selected in
+  the model tree (double-click it to edit it);
 - nothing is written to the document and nothing is saved; the tips of the bodies
   were never moved in the first place (the panel works by per-feature visibility,
   not by `Body.Tip`), so a later `Ctrl+S` stores no change of ours;
-- **the temporary thick orange profile line is removed** even so. It is a screen
-  object drawn in the 3D view, not part of the document, and it would sit on stale
-  geometry the moment you edit the sketch it follows;
 - untick it (or press `restore original` before closing) and the document's own
-  state comes back as before. The saved original state is kept across close and
-  reopen, so the escape hatch survives a `keep` close.
+  state comes back as before. The saved original state survives close and reopen,
+  so the escape hatch still works after a `keep` close.
 
 The Report view says which of the two happened:
-`view kept on close: level 31/68 of _02_seringue_cardanV3 left as displayed`.
+`view kept on close: level 31/68 of _02_seringue_cardanV3 left on screen, opaque and without the profile sketch (27 transparency value(s) reset, 3 sketch property(ies) restored)`.
 
 ## The profile of the selected feature, as a thick orange line
 

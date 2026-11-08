@@ -4,6 +4,22 @@ All notable changes of this addon. The version number lives in
 `freecad/SelectionInterfaceForLLM/version.py` and must match `<version>` in
 `package.xml`; the Addon Manager compares `package.xml` only.
 
+## 2.3.1 - 2026-11-08
+
+A kept view is now a clean view, and the box sits with the other boxes.
+
+- Ticked, `keep the build on closing` leaves the build **on screen at the step you
+  were looking at, but opaque and without the profile sketch**: the thick orange
+  line, the highlighted profile sketch (its own visibility, line width and colour
+  are given back) and the see-through transparency raised on the selected step's
+  body are all undone. Only the *build* is kept, not the browsing aids — measured
+  on `_02_seringue_cardanV3` at step 31: 27 transparency values reset and 3 sketch
+  properties restored, while the step's features stay visible.
+- The box moved out of the bottom of the panel into a new **`options`** group
+  directly under `show also`, together with `select in the model tree`, so no
+  checkbox dangles under the buttons any more. Its label is now
+  `keep the build on closing`.
+
 ## 2.3.0 - 2026-11-08
 
 Keep the display when you close the panel.
