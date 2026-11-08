@@ -54,7 +54,7 @@ except Exception:  # pragma: no cover - headless
 try:                     # the package owns the version number (see version.py)
     from .version import __version__ as VERSION
 except ImportError:      # direct run: python interface.py <file.FCStd>
-    VERSION = "2.1.0"
+    VERSION = "2.2.0"
 
 LIB_NAME = "Selection_interface_for_LLM"
 DOCK_NAME = "Selection_interface_for_LLM_Dock"
@@ -965,6 +965,204 @@ def active_view():
     if view is None:
         raise RuntimeError("no active 3D view: front the document window first")
     return view
+
+
+# -- the model tree: expand down to the step and select it ------------------
+
+# FreeCAD 1.1.4 draws the model tree with a Gui::TreeWidget (a QTreeWidget).
+# Its items expose nothing but their text: item.data(0, Qt.UserRole) is None for
+# every document object (measured), so an object is found by matching its Label,
+# then its internal Name.  Labels can repeat; the first match wins.
+TREE_CLASSES = ("Gui::TreeWidget", "Gui::TreeView", "Gui::DocumentTree")
+
+
+def model_tree():
+    """FreeCAD's model tree widget, or None when there is no GUI/tree."""
+    if not GUI:
+        return None
+    main = FreeCADGui.getMainWindow()
+    if main is None:
+        return None
+    fallback = None
+    for widget in main.findChildren(QtWidgets.QTreeWidget):
+        if widget.metaObject().className() in TREE_CLASSES:
+            if widget.isVisible():
+                return widget
+            if fallback is None:
+                fallback = widget
+    return fallback
+
+
+def tree_items(tree):
+    """Every item of the tree, depth first."""
+    items = []
+    stack = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+    stack.reverse()
+    while stack:
+        item = stack.pop()
+        items.append(item)
+        children = [item.child(i) for i in range(item.childCount())]
+        children.reverse()
+        stack.extend(children)
+    return items
+
+
+def find_tree_item(tree, obj):
+    """The tree item that shows `obj`, or None.
+
+    ``findItems`` comes first on purpose: it is a single C++ call, whereas
+    walking the tree item by item can straddle a rebuild FreeCAD runs under our
+    feet ('Internal C++ object already deleted').  Labels can repeat, the first
+    match wins, and the label is the only handle the widget gives: on 1.1.4
+    item.data(0, Qt.UserRole) is None for every document object (measured).
+    """
+    if tree is None or obj is None:
+        return None
+    for label in ((obj.Label or "").strip(), (obj.Name or "").strip()):
+        if not label:
+            continue
+        try:
+            matches = tree.findItems(
+                label, QtCore.Qt.MatchExactly | QtCore.Qt.MatchRecursive, 0)
+        except RuntimeError:
+            return None
+        if matches:
+            return matches[0]
+    return None
+
+
+def locate_object(obj, attempts=4):
+    """Expand the tree down to `obj` and make its row current (no selection).
+
+    FreeCAD rebuilds the tree items whenever the document changes and a Python
+    reference to an item dies with them, so find-then-use is retried, each
+    attempt after letting the event loop run.
+    """
+    result = {"ok": False, "expanded": 0, "attempt": 0, "reason": ""}
+    if obj is None:
+        result["reason"] = "no object"
+        return result
+    if not GUI:
+        result["reason"] = "no GUI"
+        return result
+    for attempt in range(max(1, attempts)):
+        tree = model_tree()
+        if tree is None:
+            result["reason"] = "no model tree open"
+            return result
+        try:
+            pump(1)                       # a pending rebuild happens now
+            item = find_tree_item(tree, obj)
+            if item is None:
+                result["reason"] = "not in the tree"
+                continue
+            parents = []
+            parent = item.parent()
+            while parent is not None:
+                parents.append(parent)
+                parent = parent.parent()
+            expanded = 0
+            for node in parents:
+                if not node.isExpanded():
+                    node.setExpanded(True)
+                    expanded += 1
+            tree.setCurrentItem(item)
+            tree.scrollToItem(item)
+            result.update(ok=True, expanded=expanded, attempt=attempt + 1,
+                          reason="")
+            return result
+        except RuntimeError as exc:       # the tree was rebuilt under us
+            result.update(expanded=0, reason="tree rebuilt (%s)" % exc)
+    result["reason"] = result["reason"] or "not in the tree"
+    return result
+
+
+def reveal_object(obj, doc=None):
+    """Expand the model tree down to `obj`, select it there and in FreeCAD.
+
+    Nothing is raised: the tree is a convenience, and the panel has to keep
+    working when no tree is open.  Returns a dict with 'ok' (found in the tree),
+    'selected', 'expanded' (branches opened), 'attempt', 'label' and 'reason'.
+    """
+    result = {"ok": False, "selected": False, "expanded": 0, "attempt": 0,
+              "label": (obj.Label or obj.Name) if obj is not None else None,
+              "reason": ""}
+    if obj is None:
+        result["reason"] = "no object"
+        return result
+    if not GUI:
+        result["reason"] = "no GUI"
+        return result
+    located = locate_object(obj)
+    result.update(ok=located["ok"], expanded=located["expanded"],
+                  attempt=located["attempt"], reason=located["reason"])
+    try:
+        target = doc if doc is not None else obj.Document
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(target.Name, obj.Name)
+        result["selected"] = True
+    except Exception as exc:
+        if not result["reason"]:
+            result["reason"] = "selection failed: %s" % exc
+    pump(2)
+    return result
+
+
+def tree_target(doc, step, show_sketch=True):
+    """What to select in the tree for a step: the sketch that is displayed (the
+    dimensions live there), else the feature itself."""
+    if doc is None or not step:
+        return None, ""
+    obj = doc.getObject(step.get("name"))
+    if obj is None:
+        return None, ""
+    if show_sketch:
+        try:
+            profile = profile_object(obj)
+        except Exception:
+            profile = None
+        if profile is not None:
+            return profile, "sketch"
+    return obj, "feature"
+
+
+def selection_snapshot():
+    """The current selection as (document name, object name) pairs.  None means
+    'no GUI', so that 'nothing selected' stays distinguishable."""
+    if not GUI:
+        return None
+    try:
+        return [(obj.Document.Name, obj.Name)
+                for obj in FreeCADGui.Selection.getSelection()]
+    except Exception:
+        return None
+
+
+def selection_restore(pairs):
+    """Give back a selection taken with selection_snapshot(): the selection is
+    always cleared first, so an empty list restores 'nothing selected'.
+    Returns the number of objects selected again, or -1 when nothing was done."""
+    if not GUI or pairs is None:
+        return -1
+    restored = 0
+    first = None
+    try:
+        FreeCADGui.Selection.clearSelection()
+        documents = FreeCAD.listDocuments()
+        for doc_name, obj_name in pairs:
+            doc = documents.get(doc_name)
+            if doc is None or doc.getObject(obj_name) is None:
+                continue
+            FreeCADGui.Selection.addSelection(doc_name, obj_name)
+            restored += 1
+            if first is None:
+                first = doc.getObject(obj_name)
+    except Exception:
+        pass
+    if first is not None:
+        locate_object(first)          # the tree row follows the selection back
+    pump()
+    return restored
 
 
 def _subwindow_label(sub):
@@ -1951,6 +2149,9 @@ if GUI:
             self.last_prompt_path = ""
             self.last_prompt_file = ""
             self.display = DISPLAY_MODES[0][0]
+            self.tree_select = True
+            # the selection found when the panel opened, given back on close
+            self.saved_selection = selection_snapshot()
             self._build_ui()
             self.refresh(initial=True)
 
@@ -2013,6 +2214,16 @@ if GUI:
                     box.setChecked(True)
                 show_grid.addWidget(box, index // 2, index % 2)
             outer.addWidget(self.show_box)
+
+            self.cb_tree = QtWidgets.QCheckBox("select in the model tree")
+            self.cb_tree.setObjectName("Selection_TreeSelect")
+            self.cb_tree.setChecked(True)
+            self.cb_tree.setToolTip(
+                "Ticking a step also expands the model tree down to that object\n"
+                "and selects it, so it can be edited right away (double-click in\n"
+                "the tree). When the profile sketch is shown, the sketch is what\n"
+                "gets selected: that is where the dimensions live")
+            outer.addWidget(self.cb_tree)
 
             self.list = QtWidgets.QTreeWidget()
             self.list.setObjectName("Selection_StepList")
@@ -2094,6 +2305,7 @@ if GUI:
             self.open_btn.clicked.connect(self.open_gif)
             self.prompt_btn.clicked.connect(self.copy_llm_prompt)
             self.mode_box.currentTextChanged.connect(self.set_display_mode)
+            self.cb_tree.toggled.connect(self.set_tree_select)
             for box in (self.cb_datum, self.cb_sketch, self.cb_others,
                         self.cb_dup):
                 box.toggled.connect(self.set_show_options)
@@ -2198,6 +2410,10 @@ if GUI:
                     info += "   |   not shown: " + ", ".join(hidden)
             if self.tl["warnings"]:
                 info += "  |  %d warning(s), see report view" % len(self.tl["warnings"])
+            if self.level > 0 and self.tree_select and not self.busy:
+                note = self.select_step_in_tree(self.tl["steps"][self.level - 1])
+                if note:
+                    info += "\n" + note
             self.status.setText(info)
 
         def set_display_mode(self, label):
@@ -2216,6 +2432,34 @@ if GUI:
             self.set_level(self.level)
             pump()
 
+        def select_step_in_tree(self, step):
+            """Expand the tree to this step and select the object to edit."""
+            try:
+                obj, kind = tree_target(self.doc, step, self.cb_sketch.isChecked())
+            except Exception as exc:
+                return "tree: %s" % exc
+            if obj is None:
+                return ""
+            got = reveal_object(obj, self.doc)
+            label = obj.Label or obj.Name
+            if got.get("ok") and got.get("selected"):
+                note = "selected in the tree: %s" % label
+                if kind == "sketch":
+                    note += "   (the sketch of this step)"
+                if got.get("expanded"):
+                    note += "   (%d branch(es) opened)" % got["expanded"]
+                return note
+            if got.get("selected"):
+                return "selected %s in FreeCAD (%s)" % (
+                    label, got.get("reason") or "no tree")
+            return "tree: %s" % (got.get("reason") or "could not select")
+
+        def set_tree_select(self, checked=None):
+            """The 'select in the model tree' box was ticked or unticked."""
+            self.tree_select = bool(self.cb_tree.isChecked())
+            if self.tree_select and self.level > 0 and not self.busy:
+                self.set_level(self.level)
+
         def _on_item(self, current, previous=None):
             if self.busy or current is None:
                 return
@@ -2226,14 +2470,17 @@ if GUI:
         def restore_original(self):
             if self.snapshot is not None:
                 restore_state(self.doc, self.snapshot)
+                selection_restore(self.saved_selection)
                 pump()
-                self.status.setText("original tips and visibility restored")
+                self.status.setText(
+                    "original tips, visibility and selection restored")
 
         # -- gif -------------------------------------------------------
         def create_gif(self):
             if self.busy:
                 return
             ok = False
+            keep_selection = None
             try:
                 self.busy = True
                 self.gif_btn.setEnabled(False)
@@ -2241,6 +2488,11 @@ if GUI:
                 self.status.setText("capturing %d frames, the window must stay "
                                     "responsive..." % self.count())
                 QtWidgets.QApplication.processEvents()
+                # a selected object is drawn highlighted, and that highlight would
+                # be burned into every frame: capture with nothing selected
+                keep_selection = selection_snapshot()
+                FreeCADGui.Selection.clearSelection()
+                pump()
                 result = build_timelapse(self.doc, self.tl, mode=self.display,
                                          hide_panel=self.set_capture_mode,
                                          **self.shows())
@@ -2270,6 +2522,7 @@ if GUI:
                 warn("GIF failed: %s" % exc)
                 traceback.print_exc(file=sys.stdout)
             finally:
+                selection_restore(keep_selection)
                 self.busy = False
                 self.gif_btn.setEnabled(True)
                 if ok:
@@ -2370,6 +2623,7 @@ if GUI:
             if isinstance(panel, SelectionPanel) and panel.snapshot is not None:
                 try:
                     restore_state(panel.doc, panel.snapshot)
+                    selection_restore(panel.saved_selection)
                 except Exception as exc:
                     warn("restore on close failed: %s" % exc)
             super(SelectionDock, self).closeEvent(event)

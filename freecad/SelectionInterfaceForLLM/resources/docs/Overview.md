@@ -13,6 +13,10 @@ the objects by their dependencies, then checks that order against each body's
   row. The 3D view shows the part as it was after that step: on every body, only the
   feature built last is drawn, datums appear as they are reached, and a mirrored or
   fused result absorbs the shapes it contains instead of drawing them twice.
+* **The model tree follows the step**: a row expands the tree down to the object
+  and selects it (the driving sketch when the profile is shown), so it can be
+  edited straight away; a checkbox switches this off, and the previous selection
+  comes back when the panel is closed.
 * **The sketch that gives birth to the feature**, drawn as a thick orange line,
   visible even through the material it was padded or revolved into.
 * **A display-style selector**: solid + edges, solid, edges only, transparent,

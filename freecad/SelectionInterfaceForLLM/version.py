@@ -7,4 +7,4 @@ in step with ``<version>`` in ``package.xml``: the Addon Manager only talks abou
 that one.
 """
 
-__version__ = "2.1.1"
+__version__ = "2.2.0"

@@ -78,15 +78,27 @@ manipulates `sys.path`, the shim does.
    | `other bodies` | the parts built by the other bodies at this level. Unticked, only the body of the selected step is drawn (for a mirror or a boolean, the body it copies) |
    | `base / fused results` | **unticked by default.** A `PartDesign::FeatureBase` / `Part::MultiFuse` / `Part::Fuse` does not build a new shape, it repeats the shape of the pieces it is made from (measured: the BaseFeature of `02_seringue_cardanV3` step 60, its MultiFuse and the two halves it fuses are the same 99563.843 mm3 solid, common volume 100.00 %, same placement). Unticked, such a step is drawn at its own step only and the objects it consumes stop being drawn on their own, so the same surface is never painted twice. Ticked, it stays on screen from its step on, exactly like the tree of the document — the coincident surfaces then shimmer like a mesh |
 
+   Just under them, **`select in the model tree`** (ticked by default) makes
+   every step click expand the model tree down to what you are looking at and
+   select it, so the feature — or the sketch that drives it — can be edited
+   straight away (see *Edit the feature right away* below). Untick it to browse
+   without touching your selection.
+
    Below them, the recovered computation order is listed: `#`, feature label,
    `type <- what it consumes`. Datum planes, lines, points and coordinate systems
-   are steps like any other feature.3. `step >` / `< step`, the spin box, or clicking a row moves the development
+   are steps like any other feature.
+
+3. `step >` / `< step`, the spin box, or clicking a row moves the development
    level and the 3D view shows exactly what that level holds: the last built
    feature of every body, the datums reached so far, and the **sketch that gives
    birth to the selected feature** (highlighted orange, with its body shown
    see-through so a profile inside the material is visible). `reset` = nothing
-   built, `final` = the finished part. Nothing in the model is changed: only view
-   properties (visibility, display mode, transparency, sketch colour) are set.
+   built, `final` = the finished part. The **model tree follows too**: the branch
+   opens down to the step's object and that object is selected — the sketch when
+   the profile is shown — so it can be edited immediately (*Edit the feature right
+   away* below; the `select in the model tree` box switches this off). Nothing in
+   the model is changed: only view properties (visibility, display mode,
+   transparency, sketch colour) are set.
 4. **create GIF (all steps)** frames the final part from the current viewing
    angle, sweeps every step, writes
    `Downloads\FreeCAD_timelapse\<document>_<stamp>\` with
@@ -98,12 +110,45 @@ manipulates `sys.path`, the shim does.
    it picks the newest GIF under `Downloads\FreeCAD_timelapse\`, preferring one
    made from the active document.
 6. `restore original` (or closing the panel) puts back tips, visibility, display
-   mode, transparency and sketch colours the document had before the macro
-   touched it. The document is **never saved**.
+   mode, transparency, sketch colours **and the selection** the document had
+   before the macro touched it. The document is **never saved**.
 7. Under the buttons, type the change you want in the small text box (e.g.
    `set holes diameter to 5mm`), select the step in the list and click
    **copy to clipboard description for LLM**: a self-contained request is copied,
    ready to paste into an LLM session (see below).
+
+## Edit the feature right away: the tree follows the step
+
+Clicking a step does not only change the 3D view: the model tree expands down to
+that object and selects it, so the next double-click lands on the feature you are
+looking at instead of being a hunt through the tree.
+
+- **what gets selected** is what the panel is showing: the *sketch* that drives
+  the selected feature (that is where the dimensions live — on `guide_percage26`
+  step 3 *Pocket*, selecting the pocket would be useless, its `Sketch002` is what
+  carries the hole diameter), otherwise the feature itself, otherwise the datum
+  plane when the step is one;
+- the branch opens, the row is scrolled into view and the status line says what
+  was picked:
+  `selected in the tree: trou   (the sketch of this step)   (3 branch(es) opened)`;
+- **`select in the model tree`** (ticked by default) turns the whole thing off
+  when you want to browse without disturbing your own selection;
+- `restore original` and closing the panel give your **previous selection back**,
+  like every other thing the panel changed;
+- **create GIF** captures with *nothing* selected: a selected object is drawn
+  highlighted and that highlight would be burned into every frame (measured on
+  `guide_percage26`: selecting one object changes 18 436 pixels of the capture).
+  The selection is put back when the run ends.
+
+Two facts about FreeCAD 1.1.4 worth knowing here, both measured: the model tree
+is a `Gui::TreeWidget` whose items expose **only their text** —
+`item.data(0, Qt.UserRole)` is `None` for every document object — so the object is
+found by matching its Label, then its internal Name, and two objects sharing a
+label give the first match. And FreeCAD **deletes and recreates every item**
+whenever the document changes, so a `QTreeWidgetItem` reference dies between two
+calls (`Internal C++ object ... already deleted`): the find-then-use sequence is
+retried after letting the event loop run, and the item is fetched with a single
+`findItems()` call rather than a Python walk.
 
 ## The profile of the selected feature, as a thick orange line
 

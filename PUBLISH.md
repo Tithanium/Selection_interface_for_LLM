@@ -164,6 +164,9 @@ What it does
 - "create GIF" replays every step with *your* viewing angle - the angle is preserved, only
   the fit changes - writes one annotated PNG per step and the assembled GIF into
   Downloads/FreeCAD_timelapse/<model>_<date>/ ;
+- clicking a step also expands the model tree down to that object and selects it
+  (the sketch when the profile is shown), so the part can be edited on the spot - the
+  LLM handoff is there for the changes you do not want to make by hand;
 - copies a self-contained description of one feature (parameters, driving sketch or
   pattern, the whole document's build order, volumes) to the clipboard *and* to a .md
   file, ready to paste into an LLM when you want a scripted modification.
@@ -209,6 +212,9 @@ Ce qu'il fait
 - « create GIF » rejoue toutes les étapes avec *votre* angle de vue (l'angle est conservé,
   seul le cadrage change), écrit une image PNG annotée par étape puis le GIF dans
   Téléchargements\FreeCAD_timelapse\<modele>_<date>\ ;
+- cliquer une étape déplie aussi l'arbre du modèle jusqu'à cet objet et le sélectionne
+  (l'esquisse quand le profil est affiché), donc la pièce se modifie sur place — le
+  passage par un LLM sert aux changements qu'on ne veut pas faire à la main ;
 - copie une description autonome d'une fonction (paramètres, esquisse ou motif d'origine,
   ordre de construction du document, volumes) dans le presse-papier *et* dans un fichier
   .md, prête à coller dans un LLM pour demander une modification scriptée.

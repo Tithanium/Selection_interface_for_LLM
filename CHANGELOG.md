@@ -4,6 +4,35 @@ All notable changes of this addon. The version number lives in
 `freecad/SelectionInterfaceForLLM/version.py` and must match `<version>` in
 `package.xml`; the Addon Manager compares `package.xml` only.
 
+## 2.2.0 - 2026-11-08
+
+Selecting a step now selects it in the model tree, so a feature or its sketch can
+be edited straight away instead of being described to an LLM.
+
+- **The model tree follows the step**: clicking a row (or `step >`, `< step`, the
+  spin box, `reset`, `final`) expands the tree down to the object of that step,
+  scrolls the row into view and selects it. What gets selected is what is
+  displayed: the **sketch** that drives the feature when the profile is shown
+  (that is where the dimensions live), otherwise the feature, otherwise the datum
+  plane. Measured on `guide_percage26`: step 1 selects `Sketch`, step 2 selects
+  `trou` (the sketch carrying the hole diameter), step 3 selects `Sketch002`,
+  datum steps select their datum, and the tree opened 3 branches for the first
+  step.
+- **`select in the model tree`** checkbox, ticked by default, switches it off for
+  people who want to browse without touching their own selection.
+- **The previous selection is given back** by `restore original`, by closing the
+  panel and at the end of a GIF run, like every other thing the panel changes.
+- **GIF frames can no longer carry a selection highlight**: `create GIF` clears
+  the selection before the sweep and restores it afterwards. Measured: selecting
+  one object changes 18 436 pixels of a 900x640 capture, and a per-frame probe
+  recorded an empty selection at all 7 capture calls of a panel run started with
+  an object selected.
+- Robustness learned the hard way: FreeCAD 1.1.4 deletes and recreates every
+  `Gui::TreeWidget` item whenever the document changes, so a held item raises
+  `Internal C++ object ... already deleted`. The helpers now fetch the item with
+  one `findItems()` call, let the event loop run first, and retry the
+  find-then-use sequence on `RuntimeError`.
+
 ## 2.1.1 - 2026-11-08
 
 Discoverability round — no change to the panel, the ordering or the GIF export.
