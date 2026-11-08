@@ -54,7 +54,7 @@ except Exception:  # pragma: no cover - headless
 try:                     # the package owns the version number (see version.py)
     from .version import __version__ as VERSION
 except ImportError:      # direct run: python interface.py <file.FCStd>
-    VERSION = "2.2.0"
+    VERSION = "2.3.0"
 
 LIB_NAME = "Selection_interface_for_LLM"
 DOCK_NAME = "Selection_interface_for_LLM_Dock"
@@ -2150,6 +2150,9 @@ if GUI:
             self.last_prompt_file = ""
             self.display = DISPLAY_MODES[0][0]
             self.tree_select = True
+            # closing the panel gives the document its own view back, unless
+            # the user asked for the display to stay as it is
+            self.keep_state = False
             # the selection found when the panel opened, given back on close
             self.saved_selection = selection_snapshot()
             self._build_ui()
@@ -2224,6 +2227,18 @@ if GUI:
                 "the tree). When the profile sketch is shown, the sketch is what\n"
                 "gets selected: that is where the dimensions live")
             outer.addWidget(self.cb_tree)
+
+            self.cb_keep = QtWidgets.QCheckBox("keep the view on closing")
+            self.cb_keep.setObjectName("Selection_KeepState")
+            self.cb_keep.setChecked(False)
+            self.cb_keep.setToolTip(
+                "Unticked (default): closing the panel -- or 'restore original' --\n"
+                "gives the document its own visibility, display mode, transparency,\n"
+                "colours and selection back.\n"
+                "Ticked: closing the panel leaves the display exactly as it is, so\n"
+                "you can keep working on the part as it was shown at that step.\n"
+                "The document is never saved either way.")
+            outer.addWidget(self.cb_keep)
 
             self.list = QtWidgets.QTreeWidget()
             self.list.setObjectName("Selection_StepList")
@@ -2306,6 +2321,8 @@ if GUI:
             self.prompt_btn.clicked.connect(self.copy_llm_prompt)
             self.mode_box.currentTextChanged.connect(self.set_display_mode)
             self.cb_tree.toggled.connect(self.set_tree_select)
+            self.cb_keep.setChecked(bool(self.keep_state))
+            self.cb_keep.toggled.connect(self.set_keep_state)
             for box in (self.cb_datum, self.cb_sketch, self.cb_others,
                         self.cb_dup):
                 box.toggled.connect(self.set_show_options)
@@ -2459,6 +2476,16 @@ if GUI:
             self.tree_select = bool(self.cb_tree.isChecked())
             if self.tree_select and self.level > 0 and not self.busy:
                 self.set_level(self.level)
+
+        def set_keep_state(self, checked=None):
+            """The 'keep the view on closing' box was ticked or unticked."""
+            self.keep_state = bool(self.cb_keep.isChecked())
+            if self.keep_state:
+                self.status.setText("closing the panel will keep the display as "
+                                    "it is (the document is still never saved)")
+            else:
+                self.status.setText("closing the panel will give the document "
+                                    "its own view back")
 
         def _on_item(self, current, previous=None):
             if self.busy or current is None:
@@ -2622,8 +2649,18 @@ if GUI:
             panel = self.widget()
             if isinstance(panel, SelectionPanel) and panel.snapshot is not None:
                 try:
-                    restore_state(panel.doc, panel.snapshot)
-                    selection_restore(panel.saved_selection)
+                    if panel.keep_state:
+                        # the user asked for the display to stay as it is. Only the
+                        # temporary orange profile line goes away: it is drawn in the
+                        # 3D view, not in the document, and it would sit on stale
+                        # geometry as soon as the sketch it follows is edited.
+                        clear_profile_overlay()
+                        log("view kept on close: level %d/%d of %s left as displayed "
+                            "(the temporary profile line is removed)"
+                            % (panel.level, panel.count(), panel.doc.Name))
+                    else:
+                        restore_state(panel.doc, panel.snapshot)
+                        selection_restore(panel.saved_selection)
                 except Exception as exc:
                     warn("restore on close failed: %s" % exc)
             super(SelectionDock, self).closeEvent(event)

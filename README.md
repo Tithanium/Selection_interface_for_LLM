@@ -111,7 +111,9 @@ manipulates `sys.path`, the shim does.
    made from the active document.
 6. `restore original` (or closing the panel) puts back tips, visibility, display
    mode, transparency, sketch colours **and the selection** the document had
-   before the macro touched it. The document is **never saved**.
+   before the macro touched it. The document is **never saved**. If you would
+   rather keep the display you are looking at, tick **`keep the view on
+   closing`** (see *Keeping the display when the panel is closed* below).
 7. Under the buttons, type the change you want in the small text box (e.g.
    `set holes diameter to 5mm`), select the step in the list and click
    **copy to clipboard description for LLM**: a self-contained request is copied,
@@ -149,6 +151,32 @@ whenever the document changes, so a `QTreeWidgetItem` reference dies between two
 calls (`Internal C++ object ... already deleted`): the find-then-use sequence is
 retried after letting the event loop run, and the item is fetched with a single
 `findItems()` call rather than a Python walk.
+
+## Keeping the display when the panel is closed
+
+By default closing the panel (or pressing `restore original`) gives the document
+its own view back: that is the "the tool changes nothing" promise, and it is what
+makes it safe to open on a part you are working on.
+
+Sometimes you want the opposite: close the panel and **stay** on the step you were
+looking at, to keep working on the part as it is shown — measure it, screenshot
+it, or edit the sketch you just selected. For that, tick
+**`keep the view on closing`**:
+
+- the 3D view stays exactly as displayed at that step — visibility, display mode,
+  transparency, sketch colours and the selection;
+- nothing is written to the document and nothing is saved; the tips of the bodies
+  were never moved in the first place (the panel works by per-feature visibility,
+  not by `Body.Tip`), so a later `Ctrl+S` stores no change of ours;
+- **the temporary thick orange profile line is removed** even so. It is a screen
+  object drawn in the 3D view, not part of the document, and it would sit on stale
+  geometry the moment you edit the sketch it follows;
+- untick it (or press `restore original` before closing) and the document's own
+  state comes back as before. The saved original state is kept across close and
+  reopen, so the escape hatch survives a `keep` close.
+
+The Report view says which of the two happened:
+`view kept on close: level 31/68 of _02_seringue_cardanV3 left as displayed`.
 
 ## The profile of the selected feature, as a thick orange line
 

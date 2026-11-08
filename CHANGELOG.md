@@ -4,6 +4,22 @@ All notable changes of this addon. The version number lives in
 `freecad/SelectionInterfaceForLLM/version.py` and must match `<version>` in
 `package.xml`; the Addon Manager compares `package.xml` only.
 
+## 2.3.0 - 2026-11-08
+
+Keep the display when you close the panel.
+
+- New checkbox **`keep the view on closing`**, unticked by default. Ticked,
+  closing the panel leaves the 3D view exactly as it was displayed at that step
+  (visibility, display mode, transparency, sketch colours, selection) instead of
+  giving the document its own view back, so you can go on working on the part as
+  it was shown. The document is still never saved, and `restore original` (or the
+  box unticked) still brings the document's own state back.
+- The temporary thick orange profile line is always removed on close, even with
+  the box ticked: it is drawn in the 3D view rather than in the document, so it
+  would stay on stale geometry as soon as the sketch it follows is edited. What
+  the box keeps is the document's own view state.
+- Report view gets one line saying which of the two happened.
+
 ## 2.2.0 - 2026-11-08
 
 Selecting a step now selects it in the model tree, so a feature or its sketch can
